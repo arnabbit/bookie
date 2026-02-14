@@ -1,12 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { books as hardcodedBooks } from '@/books';
-import { loadUserBooks, saveUserBook } from './bookStorage';
+import { deleteUserBook, loadUserBooks, saveUserBook } from './bookStorage';
 import { Book } from '@/types';
 
 interface BooksContextValue {
   books: Book[];
   loading: boolean;
   addBook: (book: Book) => Promise<void>;
+  deleteBook: (bookId: number) => Promise<void>;
+  isUserBook: (bookId: number) => boolean;
   refresh: () => Promise<void>;
 }
 
@@ -33,8 +35,15 @@ export function BooksProvider({ children }: { children: React.ReactNode }) {
     await refresh();
   };
 
+  const deleteBook = async (bookId: number) => {
+    await deleteUserBook(bookId);
+    await refresh();
+  };
+
+  const isUserBook = (bookId: number) => userBooks.some(b => b.id === bookId);
+
   return (
-    <BooksContext.Provider value={{ books: allBooks, loading, addBook, refresh }}>
+    <BooksContext.Provider value={{ books: allBooks, loading, addBook, deleteBook, isUserBook, refresh }}>
       {children}
     </BooksContext.Provider>
   );

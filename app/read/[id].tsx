@@ -5,7 +5,7 @@ import { Book, Chapter } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { FlatList, ListRenderItem, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View, ViewToken } from 'react-native';
+import { Alert, FlatList, ListRenderItem, Platform, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View, ViewToken } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 
@@ -14,7 +14,7 @@ type ReadingItem = (Chapter & { type?: undefined }) | { type: 'end'; id: string 
 export default function ReadScreen() {
     const { id } = useLocalSearchParams();
     const router = useRouter();
-    const { books } = useBooksContext();
+    const { books, deleteBook, isUserBook } = useBooksContext();
     const currentIndexRef = useRef(0);
     const scrollTargetRef = useRef(0);
     const [maxIndex, setMaxIndex] = useState(0);
@@ -147,7 +147,34 @@ export default function ReadScreen() {
                     <Ionicons name="close" size={24} color="#1f2937" />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle} numberOfLines={1}>{book.title}</Text>
-                <View style={{ width: 24 }} />
+                {isUserBook(book.id) ? (
+                    <TouchableOpacity
+                        onPress={() => {
+                            const doDelete = async () => {
+                                await deleteBook(book.id);
+                                router.back();
+                            };
+                            if (Platform.OS === 'web') {
+                                if (confirm('Delete this book from your library?')) doDelete();
+                            } else {
+                                Alert.alert(
+                                    'Delete Book',
+                                    'Delete this book from your library?',
+                                    [
+                                        { text: 'Cancel', style: 'cancel' },
+                                        { text: 'Delete', style: 'destructive', onPress: doDelete },
+                                    ]
+                                );
+                            }
+                        }}
+                        style={styles.backButton}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                        <Ionicons name="trash-outline" size={22} color="#ef4444" />
+                    </TouchableOpacity>
+                ) : (
+                    <View style={{ width: 24 }} />
+                )}
             </View>
 
             <View style={{ flex: 1 }} onLayout={(e) => setListHeight(e.nativeEvent.layout.height)}>

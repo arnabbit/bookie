@@ -1,11 +1,14 @@
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import BookCard from '@/components/BookCard';
 import AddBookButton from '@/components/AddBookButton';
 import { useBooksContext } from '@/lib/BooksContext';
 import { Book } from '@/types';
-import { FlatList, ListRenderItem, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, ListRenderItem, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 export default function BookCatalogueScreen() {
   const { books } = useBooksContext();
+  const router = useRouter();
 
   const renderItem: ListRenderItem<Book> = ({ item }) => (
     <BookCard book={item} />
@@ -14,8 +17,19 @@ export default function BookCatalogueScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Discover</Text>
-        <Text style={styles.headerSubtitle}>Find your next favorite read</Text>
+        <View style={styles.headerRow}>
+          <View>
+            <Text style={styles.headerTitle}>Discover</Text>
+            <Text style={styles.headerSubtitle}>Find your next favorite read</Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => router.push('/settings' as any)}
+            style={styles.settingsButton}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="settings-outline" size={24} color="#6b7280" />
+          </TouchableOpacity>
+        </View>
       </View>
       <FlatList
         data={books}
@@ -43,6 +57,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  settingsButton: {
+    padding: 4,
+    marginTop: 4,
   },
   headerTitle: {
     fontSize: 28,

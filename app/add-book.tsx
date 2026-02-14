@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { getApiKey } from '@/lib/apiKeyStorage';
 import { useBooksContext } from '@/lib/BooksContext';
 import { GeminiBookResult, pickCoverColor, processPdfWithGemini } from '@/lib/gemini';
 import { Book } from '@/types';
@@ -58,7 +59,7 @@ export default function AddBookScreen() {
   const [book, setBook] = useState<Book | null>(null);
   const [fileName, setFileName] = useState('');
   const fileUriRef = useRef('');
-  const timerRef = useRef<ReturnType<typeof setInterval>>();
+  const timerRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   useEffect(() => {
     if (state === 'processing') {
@@ -72,8 +73,16 @@ export default function AddBookScreen() {
     };
   }, [state]);
 
+  const [missingKey, setMissingKey] = useState(false);
+
   const pickAndProcess = useCallback(async () => {
     try {
+      const apiKey = await getApiKey();
+      if (!apiKey) {
+        setMissingKey(true);
+        return;
+      }
+
       const result = await DocumentPicker.getDocumentAsync({
         type: 'application/pdf',
         copyToCacheDirectory: true,
@@ -95,7 +104,7 @@ export default function AddBookScreen() {
       fileUriRef.current = file.uri;
       setState('processing');
 
-      const geminiResult = await processPdfWithGemini(file.uri);
+      const geminiResult = await processPdfWithGemini(file.uri, apiKey);
       const assembled = assembleBook(geminiResult);
       setBook(assembled);
       setState('preview');
@@ -128,7 +137,7 @@ export default function AddBookScreen() {
         <View style={{ width: 24 }} />
       </View>
 
-      {state === 'idle' && (
+      {state === 'idle' && !missingKey && (
         <View style={styles.centered}>
           <Ionicons name="document-attach" size={64} color="#9ca3af" />
           <Text style={styles.idleTitle}>Upload a PDF</Text>
@@ -181,6 +190,26 @@ export default function AddBookScreen() {
             <Text style={styles.discardButtonText}>Discard</Text>
           </TouchableOpacity>
         </ScrollView>
+      )}
+
+      {missingKey && (
+        <View style={styles.centered}>
+          <Ionicons name="key-outline" size={64} color="#f59e0b" />
+          <Text style={styles.idleTitle}>API Key Required</Text>
+          <Text style={styles.idleSubtitle}>
+            To generate book summaries, please add your Gemini API key in Settings.
+          </Text>
+          <TouchableOpacity
+            style={styles.uploadButton}
+            onPress={() => {
+              router.back();
+              setTimeout(() => router.push('/settings' as any), 100);
+            }}
+          >
+            <Ionicons name="settings-outline" size={20} color="#fff" />
+            <Text style={styles.uploadButtonText}>Go to Settings</Text>
+          </TouchableOpacity>
+        </View>
       )}
 
       {state === 'error' && (

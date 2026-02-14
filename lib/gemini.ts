@@ -1,7 +1,6 @@
 import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
 
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '';
 const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
@@ -17,18 +16,18 @@ export interface GeminiBookResult {
   }[];
 }
 
-const GEMINI_PROMPT = `You are a literary analyst and storyteller. Analyze this PDF book and produce a structured JSON response.
+const GEMINI_PROMPT = `You are a literary analyst and storyteller who is known to imitate any author's style. Analyze this PDF book and produce a structured JSON response.
 
 Your task:
 1. Extract the book's title and author from the content.
 2. Identify all chapters or natural divisions in the text.
-3. For each chapter, write a narrative summary (2-4 sentences) in a warm, first-person literary style — as if a thoughtful narrator is retelling the story to a friend. Do NOT copy text verbatim.
-4. For each chapter, break the content into 2-4 "pages". Each page summary should be a paragraph (3-5 sentences) that narratively retells that portion of the chapter in the same literary style.
+3. For each chapter, write a narrative summary (4-5 sentences) in the author's literary style — as if the author is retelling the story to a friend. Do NOT copy text verbatim.
+4. For each chapter, break the content into 6-10 "pages". Each page summary should be a paragraph (3-5 sentences) that narratively retells that portion of the chapter in the same literary style.
 5. Select a memorable quote from the book.
 6. Assign 2-4 genre/theme tags.
 
 Style guide for summaries:
-- Use first-person narration ("I must tell you...", "It is here that we find...")
+- Use author like narration, but simplify the words to be palatable to a passive reader
 - Be evocative and literary, not clinical
 - Capture the emotional tone of the source material
 - Each page summary should be self-contained and readable on its own
@@ -42,7 +41,7 @@ Respond with ONLY valid JSON in this exact structure:
   "chapters": [
     {
       "title": "string — a creative chapter title",
-      "summary": "string — 2-4 sentence narrative summary",
+      "summary": "string — 4-5 sentence narrative summary",
       "pages": [
         { "summary": "string — 3-5 sentence narrative retelling of this section" }
       ]
@@ -50,9 +49,9 @@ Respond with ONLY valid JSON in this exact structure:
   ]
 }`;
 
-export async function processPdfWithGemini(fileUri: string): Promise<GeminiBookResult> {
-  if (!GEMINI_API_KEY) {
-    throw new Error('Gemini API key is not configured. Set EXPO_PUBLIC_GEMINI_API_KEY in your .env file.');
+export async function processPdfWithGemini(fileUri: string, apiKey: string): Promise<GeminiBookResult> {
+  if (!apiKey) {
+    throw new Error('Gemini API key is not configured. Please add your API key in Settings.');
   }
 
   let base64: string;
@@ -73,7 +72,7 @@ export async function processPdfWithGemini(fileUri: string): Promise<GeminiBookR
     });
   } else {
     base64 = await FileSystem.readAsStringAsync(fileUri, {
-      encoding: FileSystem.EncodingType.Base64,
+      encoding: 'base64' as const,
     });
   }
 
@@ -99,7 +98,7 @@ export async function processPdfWithGemini(fileUri: string): Promise<GeminiBookR
     },
   };
 
-  const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+  const response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody),
