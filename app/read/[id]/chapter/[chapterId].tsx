@@ -1,4 +1,4 @@
-import { books } from '@/books';
+import { useBooksContext } from '@/lib/BooksContext';
 import PageView from '@/components/PageView';
 import ProgressBar from '@/components/ProgressBar';
 import { Book, Chapter, Page } from '@/types';
@@ -19,7 +19,8 @@ export default function ChapterDetailsScreen() {
     const [maxIndex, setMaxIndex] = useState(0);
     const [listHeight, setListHeight] = useState(0);
 
-    const book = useMemo(() => books.find((b: Book) => b.id === Number(id)), [id]);
+    const { books } = useBooksContext();
+    const book = useMemo(() => books.find((b: Book) => b.id === Number(id)), [id, books]);
     const chapter = useMemo(() => book?.chapters.find((c: Chapter) => c.id === Number(chapterId)), [book, chapterId]);
 
     const data: ReadingPage[] = useMemo(() => {

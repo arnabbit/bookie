@@ -1,4 +1,4 @@
-import { books } from '@/books';
+import { useBooksContext } from '@/lib/BooksContext';
 import ChapterView from '@/components/ChapterView';
 import ProgressBar from '@/components/ProgressBar';
 import { Book, Chapter } from '@/types';
@@ -14,20 +14,26 @@ type ReadingItem = (Chapter & { type?: undefined }) | { type: 'end'; id: string 
 export default function ReadScreen() {
     const { id } = useLocalSearchParams();
     const router = useRouter();
+    const { books } = useBooksContext();
     const currentIndexRef = useRef(0);
+    const scrollTargetRef = useRef(0);
     const [maxIndex, setMaxIndex] = useState(0);
     const [listHeight, setListHeight] = useState(0);
     const flatListRef = useRef<FlatList<ReadingItem>>(null);
 
     useFocusEffect(
         useCallback(() => {
-            if (flatListRef.current && listHeight > 0 && currentIndexRef.current > 0) {
-                flatListRef.current.scrollToIndex({ index: currentIndexRef.current, animated: false });
+            if (flatListRef.current && listHeight > 0 && scrollTargetRef.current > 0) {
+                flatListRef.current.scrollToIndex({ index: scrollTargetRef.current, animated: false });
             }
+
+            return () => {
+                scrollTargetRef.current = currentIndexRef.current;
+            };
         }, [listHeight])
     );
 
-    const book = useMemo(() => books.find((b: Book) => b.id === Number(id)), [id]);
+    const book = useMemo(() => books.find((b: Book) => b.id === Number(id)), [id, books]);
 
     const recommendations = useMemo(() => {
         if (!book) return [];
@@ -101,7 +107,7 @@ export default function ReadScreen() {
                                     style={styles.recCard}
                                     onPress={() => router.replace(`/read/${rec.id}`)}
                                 >
-                                    <View style={[styles.recCover, { backgroundColor: rec.coverColor === 'bg-stone-600' ? '#57534e' : '#1d4ed8' }]} />
+                                    <View style={[styles.recCover, { backgroundColor: rec.coverColor.startsWith('#') ? rec.coverColor : (rec.coverColor === 'bg-stone-600' ? '#57534e' : '#1d4ed8') }]} />
                                     <View style={styles.recInfo}>
                                         <Text style={styles.recBookTitle}>{rec.title}</Text>
                                         <Text style={styles.recAuthor}>{rec.author}</Text>

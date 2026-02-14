@@ -17,8 +17,9 @@ interface Props {
 }
 
 export default function BookCard({ book }: Props) {
-    const getBackgroundColor = (className: string) => {
-        return colorMap[className] || DEFAULT_COLOR;
+    const getBackgroundColor = (color: string) => {
+        if (color.startsWith('#')) return color;
+        return colorMap[color] || DEFAULT_COLOR;
     };
 
     return (

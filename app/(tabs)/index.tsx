@@ -1,9 +1,12 @@
-import { books } from '@/books';
 import BookCard from '@/components/BookCard';
+import AddBookButton from '@/components/AddBookButton';
+import { useBooksContext } from '@/lib/BooksContext';
 import { Book } from '@/types';
 import { FlatList, ListRenderItem, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
 export default function BookCatalogueScreen() {
+  const { books } = useBooksContext();
+
   const renderItem: ListRenderItem<Book> = ({ item }) => (
     <BookCard book={item} />
   );
@@ -23,6 +26,7 @@ export default function BookCatalogueScreen() {
         columnWrapperStyle={styles.columnWrapper}
         showsVerticalScrollIndicator={false}
       />
+      <AddBookButton />
     </SafeAreaView>
   );
 }
