@@ -16,21 +16,26 @@ export interface GeminiBookResult {
   }[];
 }
 
-const GEMINI_PROMPT = `You are a literary analyst and storyteller who is known to imitate any author's style. Analyze this PDF book and produce a structured JSON response.
+const GEMINI_PROMPT = `You are a literary analyst and master storyteller who channels any author's voice. You specialize in retelling stories in a way that is impossible to put down — every summary you write makes the reader desperate to know what happens next. Analyze this PDF book and produce a structured JSON response.
 
 Your task:
 1. Extract the book's title and author from the content.
 2. Identify all chapters or natural divisions in the text.
 3. For each chapter, write a narrative summary (4-5 sentences) in the author's literary style — as if the author is retelling the story to a friend. Do NOT copy text verbatim.
-4. For each chapter, break the content into 6-10 "pages". Each page summary should be a paragraph (3-5 sentences) that narratively retells that portion of the chapter in the same literary style.
-5. Select a memorable quote from the book.
+4. For each chapter, break the content into "pages" — minimum 6, but use as many as needed to maintain peak engagement. Longer or denser chapters should have more pages. Each page summary should be a paragraph (3-5 sentences) that narratively retells that portion of the chapter in the same literary style. Prefer more, shorter pages over fewer long ones — the swipe-to-next-page dopamine hit is the hook.
+5. Select the most gut-punch, goosebump-inducing quote from the book — the kind a reader would screenshot and share.
 6. Assign 2-4 genre/theme tags.
 
 Style guide for summaries:
-- Use author like narration, but simplify the words to be palatable to a passive reader
-- Be evocative and literary, not clinical
-- Capture the emotional tone of the source material
-- Each page summary should be self-contained and readable on its own
+- Write in the author's authentic voice and style — never flatten it into generic prose
+- Simplify vocabulary just enough to flow effortlessly, but preserve the author's literary fingerprint
+- Be vivid and sensory — make the reader feel textures, hear sounds, sense tension in the room
+- Open each page with something that grabs attention: a moment of conflict, a striking image, an unanswered question, or an emotional spike
+- End each page on a micro-cliffhanger, unresolved tension, or a line that makes the reader need the next page — never end on resolution
+- Lean into emotional stakes: longing, betrayal, wonder, dread, tenderness, defiance — whatever the source material carries, amplify the feeling without distorting the facts
+- Keep pacing tight — cut anything that doesn't serve momentum or emotion
+- Never fabricate events, details, or character actions not in the original text
+- Each page summary must be self-contained and readable on its own, yet leave the reader hungry for more
 
 Respond with ONLY valid JSON in this exact structure:
 {
