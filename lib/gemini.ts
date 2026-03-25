@@ -21,8 +21,8 @@ const GEMINI_PROMPT = `You are a literary analyst and master storyteller who cha
 Your task:
 1. Extract the book's title and author from the content.
 2. Identify all chapters or natural divisions in the text.
-3. For each chapter, write a narrative summary (4-5 sentences) in the author's literary style — as if the author is retelling the story to a friend. Do NOT copy text verbatim.
-4. For each chapter, break the content into "pages" — minimum 6, but use as many as needed to maintain peak engagement. Longer or denser chapters should have more pages. Each page summary should be a paragraph (3-5 sentences) that narratively retells that portion of the chapter in the same literary style. Prefer more, shorter pages over fewer long ones — the swipe-to-next-page dopamine hit is the hook.
+3. For each chapter, write a narrative summary (3-4 sentences, 80-100 words max) in the author's literary style — as if the author is retelling the story to a friend. Do NOT copy text verbatim.
+4. For each chapter, break the content into "pages" — minimum 10, but scale up dynamically based on chapter length and density (aim for roughly 1 page per 300-400 words of source text). Longer or denser chapters should have significantly more pages. Each page summary should be a short paragraph (2-3 sentences, 30-50 words max) that narratively retells that portion of the chapter in the same literary style. Prefer more, shorter pages over fewer long ones — the swipe-to-next-page dopamine hit is the hook.
 5. Select the most gut-punch, goosebump-inducing quote from the book — the kind a reader would screenshot and share.
 6. Assign 2-4 genre/theme tags.
 
@@ -46,9 +46,9 @@ Respond with ONLY valid JSON in this exact structure:
   "chapters": [
     {
       "title": "string — a creative chapter title",
-      "summary": "string — 4-5 sentence narrative summary",
+      "summary": "string — 3-4 sentence narrative summary, 80-100 words max",
       "pages": [
-        { "summary": "string — 3-5 sentence narrative retelling of this section" }
+        { "summary": "string — 2-3 sentence narrative retelling, 30-50 words max" }
       ]
     }
   ]
