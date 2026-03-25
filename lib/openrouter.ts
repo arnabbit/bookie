@@ -14,18 +14,6 @@ interface ParsedPage {
 
 interface BatchResult {
   pages: { page: number; summary: string }[];
-  chapters: { title: string; startPage: number; endPage: number }[];
-}
-
-interface ChapterSummaryResult {
-  title: string;
-  author: string;
-  quote: string;
-  tags: string[];
-  chapters: {
-    title: string;
-    summary: string;
-  }[];
 }
 
 export interface ProgressiveCallbacks {
@@ -133,17 +121,12 @@ async function processBatch(
 
   const prompt = `You are given pages from a book with "Page X start" / "Page X end" markers.
 
-For each page, write a 30-50 word summary that rewrites the page content concisely while preserving the key points.
-
-Also identify where chapters start and end based on the content (look for chapter headings, major topic shifts, or explicit chapter markers).
+For each page, write a 50-70 word summary that rewrites the page content concisely while preserving the key points.
 
 Respond with ONLY valid JSON:
 {
   "pages": [
-    { "page": number, "summary": "30-50 word rewrite" }
-  ],
-  "chapters": [
-    { "title": "chapter title", "startPage": number, "endPage": number }
+    { "page": number, "summary": "50-70 word rewrite" }
   ]
 }
 
@@ -155,91 +138,23 @@ ${pagesText}`;
   return JSON.parse(raw) as BatchResult;
 }
 
-// ---------- Chapter-level summary from all page summaries ----------
+// ---------- Assemble book: all pages under one chapter ----------
 
-async function generateChapterSummaries(
-  apiKey: string,
-  model: string,
-  allPageSummaries: string,
-  chapterBoundaries: { title: string; startPage: number; endPage: number }[]
-): Promise<ChapterSummaryResult> {
-  const chaptersDesc = chapterBoundaries
-    .map((c) => `"${c.title}": pages ${c.startPage}-${c.endPage}`)
-    .join('\n');
-
-  const prompt = `You are given page-by-page summaries of an entire book, plus detected chapter boundaries.
-
-Using the page summaries below, produce:
-1. The book's title and author (infer from content)
-2. A memorable quote (infer the most impactful line)
-3. 2-4 genre/theme tags
-4. For each chapter: a narrative summary of 80-100 words in the author's style
-
-Chapter boundaries:
-${chaptersDesc}
-
-Page summaries:
-${allPageSummaries}
-
-Respond with ONLY valid JSON:
-{
-  "title": "string",
-  "author": "string",
-  "quote": "string",
-  "tags": ["string"],
-  "chapters": [
-    { "title": "string", "summary": "80-100 word narrative summary" }
-  ]
-}`;
-
-  const raw = await callOpenRouter(apiKey, model, prompt);
-  return JSON.parse(raw) as ChapterSummaryResult;
-}
-
-// ---------- Assemble partial book from what we have so far ----------
-
-function assemblePartialBook(
-  allPageSummaries: { page: number; summary: string }[],
-  chapterBoundaries: { title: string; startPage: number; endPage: number }[]
+function assemblePageByPageBook(
+  allPageSummaries: { page: number; summary: string }[]
 ): GeminiBookResult {
-  const merged = mergeChapterBoundaries(chapterBoundaries);
-
-  // If no chapters detected yet, put all pages under one chapter
-  if (merged.length === 0) {
-    return {
-      title: 'Processing...',
-      author: '',
-      quote: '',
-      tags: [],
-      chapters: [
-        {
-          title: 'Chapter 1',
-          summary: 'Processing...',
-          pages: allPageSummaries.map((p) => ({ summary: p.summary })),
-        },
-      ],
-    };
-  }
-
-  const chapters = merged.map((boundary) => {
-    const chapterPages = allPageSummaries.filter(
-      (p) => p.page >= boundary.startPage && p.page <= boundary.endPage
-    );
-    return {
-      title: boundary.title,
-      summary: 'Processing...',
-      pages: chapterPages.length > 0
-        ? chapterPages.map((p) => ({ summary: p.summary }))
-        : [{ summary: 'Processing...' }],
-    };
-  });
-
   return {
     title: 'Processing...',
     author: '',
     quote: '',
     tags: [],
-    chapters,
+    chapters: [
+      {
+        title: 'Full Book',
+        summary: '',
+        pages: allPageSummaries.map((p) => ({ summary: p.summary })),
+      },
+    ],
   };
 }
 
@@ -267,95 +182,25 @@ export async function processWithOpenRouter(
   // Step 2: Batch process pages
   const batches = batchPages(pages);
   const allPageSummaries: { page: number; summary: string }[] = [];
-  const allChapterBoundaries: { title: string; startPage: number; endPage: number }[] = [];
   let firstBookSent = false;
 
   for (let i = 0; i < batches.length; i++) {
     onStatus?.(`Summarizing pages ${i * BATCH_SIZE + 1}-${Math.min((i + 1) * BATCH_SIZE, pages.length)} of ${pages.length}...`);
     const result = await processBatch(apiKey, model, batches[i]);
     allPageSummaries.push(...result.pages);
-    allChapterBoundaries.push(...result.chapters);
 
-    // After first batch: send partial book so user can start reading
+    const book = assemblePageByPageBook(allPageSummaries);
+
     if (!firstBookSent) {
-      const partial = assemblePartialBook(allPageSummaries, allChapterBoundaries);
-      onFirstBook?.(partial);
+      onFirstBook?.(book);
       firstBookSent = true;
     } else {
-      // Update book with new pages
-      const updated = assemblePartialBook(allPageSummaries, allChapterBoundaries);
-      onBookUpdated?.(updated);
+      onBookUpdated?.(book);
     }
   }
 
-  // Step 3: Generate chapter summaries
-  onStatus?.('Generating chapter summaries...');
-  const mergedChapters = mergeChapterBoundaries(allChapterBoundaries);
-  const summaryText = allPageSummaries
-    .map((p) => `Page ${p.page}: ${p.summary}`)
-    .join('\n');
-
-  const bookResult = await generateChapterSummaries(
-    apiKey,
-    model,
-    summaryText,
-    mergedChapters
-  );
-
-  // Step 4: Final assembly
-  const chapters = bookResult.chapters.map((ch, idx) => {
-    const boundary = mergedChapters[idx];
-    const chapterPages = boundary
-      ? allPageSummaries.filter(
-          (p) => p.page >= boundary.startPage && p.page <= boundary.endPage
-        )
-      : [];
-
-    return {
-      title: ch.title,
-      summary: ch.summary,
-      pages: chapterPages.length > 0
-        ? chapterPages.map((p) => ({ summary: p.summary }))
-        : [{ summary: ch.summary }],
-    };
-  });
-
-  const finalBook: GeminiBookResult = {
-    title: bookResult.title,
-    author: bookResult.author,
-    quote: bookResult.quote,
-    tags: bookResult.tags,
-    chapters,
-  };
-
+  const finalBook = assemblePageByPageBook(allPageSummaries);
   onBookUpdated?.(finalBook);
   return finalBook;
 }
 
-// ---------- Helpers ----------
-
-function mergeChapterBoundaries(
-  boundaries: { title: string; startPage: number; endPage: number }[]
-): { title: string; startPage: number; endPage: number }[] {
-  if (boundaries.length === 0) return [];
-
-  const sorted = [...boundaries].sort((a, b) => a.startPage - b.startPage);
-  const merged: typeof sorted = [sorted[0]];
-
-  for (let i = 1; i < sorted.length; i++) {
-    const prev = merged[merged.length - 1];
-    const curr = sorted[i];
-
-    if (
-      curr.title.toLowerCase() === prev.title.toLowerCase() ||
-      curr.startPage <= prev.endPage + 1
-    ) {
-      prev.endPage = Math.max(prev.endPage, curr.endPage);
-      if (curr.title.length > prev.title.length) prev.title = curr.title;
-    } else {
-      merged.push(curr);
-    }
-  }
-
-  return merged;
-}

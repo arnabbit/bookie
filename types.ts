@@ -21,4 +21,5 @@ export interface Book {
     quote: string;
     tags: string[];
     chapters: Chapter[];
+    mode?: 'summary' | 'page-by-page';
 }

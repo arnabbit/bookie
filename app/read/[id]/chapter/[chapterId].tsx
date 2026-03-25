@@ -22,6 +22,7 @@ export default function ChapterDetailsScreen() {
     const { books } = useBooksContext();
     const book = useMemo(() => books.find((b: Book) => b.id === Number(id)), [id, books]);
     const chapter = useMemo(() => book?.chapters.find((c: Chapter) => c.id === Number(chapterId)), [book, chapterId]);
+    const isPageByPage = book?.mode === 'page-by-page';
 
     const data: ReadingPage[] = useMemo(() => {
         if (!chapter) return [];
@@ -81,9 +82,9 @@ export default function ChapterDetailsScreen() {
                     <Text style={styles.endTitle}>Chapter Complete!</Text>
                     <Text style={styles.endSubtitle}>{chapter.title}</Text>
 
-                    <TouchableOpacity style={styles.backToChaptersButton} onPress={() => router.back()}>
+                    <TouchableOpacity style={styles.backToChaptersButton} onPress={() => isPageByPage ? router.dismissTo('/') : router.back()}>
                         <Ionicons name="arrow-back" size={20} color="#fff" />
-                        <Text style={styles.backToChaptersText}>Back to Chapters</Text>
+                        <Text style={styles.backToChaptersText}>{isPageByPage ? 'Back to Library' : 'Back to Chapters'}</Text>
                     </TouchableOpacity>
                 </View>
             );
@@ -108,10 +109,10 @@ export default function ChapterDetailsScreen() {
 
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                    <Ionicons name="arrow-back" size={24} color="#1f2937" />
+                <TouchableOpacity onPress={() => isPageByPage ? router.dismissTo('/') : router.back()} style={styles.backButton}>
+                    <Ionicons name={isPageByPage ? 'close' : 'arrow-back'} size={24} color="#1f2937" />
                 </TouchableOpacity>
-                <Text style={styles.headerTitle} numberOfLines={1}>{chapter.title}</Text>
+                <Text style={styles.headerTitle} numberOfLines={1}>{isPageByPage ? book?.title : chapter.title}</Text>
                 <View style={{ width: 24 }} />
             </View>
 

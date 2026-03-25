@@ -140,15 +140,17 @@ export default function AddBookScreen() {
             const assembled = assembleBook(partial);
             assembled.id = bookId;
             assembled.coverColor = coverColor;
+            assembled.mode = 'page-by-page';
             await addBook(assembled);
             bookAdded = true;
-            // Navigate user to start reading immediately
-            router.replace(`/read/${bookId}` as any);
+            // Navigate directly to pages (chapter 1)
+            router.replace(`/read/${bookId}/chapter/1` as any);
           },
           onBookUpdated: async (updated) => {
             const assembled = assembleBook(updated);
             assembled.id = bookId;
             assembled.coverColor = coverColor;
+            assembled.mode = 'page-by-page';
             await updateBook(assembled);
           },
         };
