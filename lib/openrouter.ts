@@ -119,25 +119,33 @@ async function summarizePage(
   apiKey: string,
   model: string,
   pages: ParsedPage[],
-  index: number
+  index: number,
+  prevSummary: string | null
 ): Promise<string> {
   const prev = index > 0 ? pages[index - 1] : null;
   const curr = pages[index];
   const next = index < pages.length - 1 ? pages[index + 1] : null;
 
   let context = '';
-  if (prev) context += `--- Previous page (for context only, do NOT summarize) ---\n${prev.text}\n\n`;
-  context += `--- CURRENT PAGE (summarize ONLY this) ---\n${curr.text}\n\n`;
-  if (next) context += `--- Next page (for context only, do NOT summarize) ---\n${next.text}\n\n`;
+  if (prevSummary) context += `--- Your previous summary (continue from here) ---\n${prevSummary}\n\n`;
+  if (prev) context += `--- Previous page original text (for understanding only) ---\n${prev.text}\n\n`;
+  context += `--- CURRENT PAGE (retell ONLY this) ---\n${curr.text}\n\n`;
+  if (next) context += `--- Next page (for context only) ---\n${next.text}\n\n`;
 
-  const prompt = `You are summarizing a book page by page. Below you are given the CURRENT PAGE along with the previous and next pages for context.
+  const prompt = `You are retelling a book as a continuous narrative, one page at a time. Your goal is to create a flowing story that reads like a condensed version of the book — not isolated page summaries.
 
-Write a 50-70 word summary of ONLY the CURRENT PAGE. Do NOT include information from the previous or next pages. Only describe what is explicitly written on the current page.
+Rules:
+- Retell ONLY what happens on the CURRENT PAGE in 50-70 words
+- Continue naturally from where your previous summary left off — do not repeat or re-introduce what was already covered
+- Write in the author's voice and style — vivid, engaging, narrative prose
+- Never start with "This page..." or "The author..." — write as if you are the storyteller
+- Do NOT include events from previous or next pages
+- End in a way that flows into whatever comes next
 
 ${context}
 
 Respond with ONLY valid JSON:
-{ "summary": "50-70 word summary of the current page only" }`;
+{ "summary": "50-70 word narrative continuation" }`;
 
   const raw = await callOpenRouter(apiKey, model, prompt);
   const result = JSON.parse(raw) as PageSummaryResult;
@@ -196,7 +204,10 @@ export async function processWithOpenRouter(
 
   for (let i = 0; i < pages.length; i++) {
     onStatus?.(`Summarizing page ${i + 1} of ${pages.length}...`);
-    const summary = await summarizePage(apiKey, model, pages, i);
+    const prevSummary = allPageSummaries.length > 0
+      ? allPageSummaries[allPageSummaries.length - 1].summary
+      : null;
+    const summary = await summarizePage(apiKey, model, pages, i, prevSummary);
     allPageSummaries.push({ page: pages[i].pageNum, summary });
 
     const book = assemblePageByPageBook(allPageSummaries, pages, title, false);
