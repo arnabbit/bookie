@@ -119,47 +119,63 @@ async function callOpenRouter(
   }
 }
 
-// ---------- Single page summary with context ----------
+// ---------- Pass 1: Translate (per page, no context) ----------
 
-function lastWords(text: string, n: number): string {
-  return text.split(/\s+/).slice(-n).join(' ');
-}
-
-async function summarizePage(
+async function translatePage(
   apiKey: string,
   model: string,
-  pages: ParsedPage[],
-  index: number,
-  prevSummary: string | null
+  page: ParsedPage
 ): Promise<string> {
-  const curr = pages[index];
-  const next = index < pages.length - 1 ? pages[index + 1] : null;
+  const prompt = `Condense the following text into 50-70 words. Use only what is written — no invented details, no inferences. Write in vivid narrative prose, not as a summary. Never say "this page", "the text", or "the author".
 
-  // Current page text goes FIRST — this is what the model should focus on
-  let context = `=== TEXT TO SUMMARIZE ===\n${curr.text}\n\n`;
-  if (next) context += `=== NEXT PAGE (for context only, do NOT summarize) ===\n${next.text}\n\n`;
+Text:
+${page.text}
 
-  // Only pass a brief continuity hint, not the full previous summary
-  const continuity = prevSummary
-    ? `\nThe narrative so far ended with: "...${lastWords(prevSummary, 12)}"\nPick up from there. Do NOT repeat any of that.`
-    : '\nThis is the first page. Set the scene.';
-
-  const prompt = `Retell the TEXT TO SUMMARIZE below in 50-70 words of vivid, engaging narrative prose.
-${continuity}
-
-Rules:
-- Your summary must contain ONLY NEW information from the text above
-- Do NOT repeat, rephrase, or re-introduce anything already covered
-- Write as the storyteller — never say "this page", "the text", "the author"
-- Stay faithful to what is written — no invented details
-
-${context}
 Respond with ONLY valid JSON:
-{ "summary": "50-70 word narrative" }`;
+{ "summary": "50-70 word condensed narrative" }`;
 
   const raw = await callOpenRouter(apiKey, model, prompt);
   const result = JSON.parse(raw) as PageSummaryResult;
   return result.summary;
+}
+
+// ---------- Pass 2: Editor (batched, smooths flow) ----------
+
+const EDITOR_BATCH_SIZE = 30;
+
+async function editSummaries(
+  apiKey: string,
+  model: string,
+  summaries: { page: number; summary: string }[]
+): Promise<{ page: number; summary: string }[]> {
+  const edited: { page: number; summary: string }[] = [];
+
+  for (let i = 0; i < summaries.length; i += EDITOR_BATCH_SIZE) {
+    const batch = summaries.slice(i, i + EDITOR_BATCH_SIZE);
+    const input = batch.map((s) => `Page ${s.page}: ${s.summary}`).join('\n\n');
+
+    const prompt = `You are a literary editor. Below are condensed page-by-page summaries of a book. They are accurate but read choppily because each was written in isolation.
+
+Rewrite each summary so they flow as a continuous narrative. For each page:
+- Keep it 50-70 words
+- Remove any repetition between consecutive pages
+- Smooth transitions so one page leads naturally into the next
+- Maintain the author's voice and style
+- Do NOT add new information — only reshape what's there
+- Keep them as separate entries, one per page
+
+Summaries:
+${input}
+
+Respond with ONLY valid JSON:
+{ "pages": [ { "page": number, "summary": "edited 50-70 word narrative" } ] }`;
+
+    const raw = await callOpenRouter(apiKey, model, prompt);
+    const result = JSON.parse(raw) as { pages: { page: number; summary: string }[] };
+    edited.push(...result.pages);
+  }
+
+  return edited;
 }
 
 // ---------- Assemble book: all pages under one chapter ----------
@@ -208,30 +224,33 @@ export async function processWithOpenRouter(
 
   onStatus?.(`Found ${pages.length} pages. Processing...`);
 
-  // Step 2: Process one page at a time with prev/next context
-  const allPageSummaries: { page: number; summary: string }[] = [];
+  // Step 2: Pass 1 — translate each page (no context, accurate)
+  const rawSummaries: { page: number; summary: string }[] = [];
   let firstBookSent = false;
 
   for (let i = 0; i < pages.length; i++) {
-    onStatus?.(`Summarizing page ${i + 1} of ${pages.length}...`);
-    const prevSummary = allPageSummaries.length > 0
-      ? allPageSummaries[allPageSummaries.length - 1].summary
-      : null;
-    const summary = await summarizePage(apiKey, model, pages, i, prevSummary);
-    allPageSummaries.push({ page: pages[i].pageNum, summary });
+    onStatus?.(`Condensing page ${i + 1} of ${pages.length}...`);
+    const summary = await translatePage(apiKey, model, pages[i]);
+    rawSummaries.push({ page: pages[i].pageNum, summary });
 
-    const book = assemblePageByPageBook(allPageSummaries, pages, title, false);
+    const book = assemblePageByPageBook(rawSummaries, pages, title, false);
 
     if (!firstBookSent) {
       onFirstBook?.(book);
       firstBookSent = true;
     } else if (i % 3 === 0) {
-      // Update every 3 pages to avoid excessive storage writes
       onBookUpdated?.(book);
     }
   }
 
-  const finalBook = assemblePageByPageBook(allPageSummaries, pages, title, true);
+  // Ensure all raw summaries are saved before editing
+  onBookUpdated?.(assemblePageByPageBook(rawSummaries, pages, title, false));
+
+  // Step 3: Pass 2 — editor smooths flow across all summaries
+  onStatus?.('Polishing narrative flow...');
+  const editedSummaries = await editSummaries(apiKey, model, rawSummaries);
+
+  const finalBook = assemblePageByPageBook(editedSummaries, pages, title, true);
   onBookUpdated?.(finalBook);
   return finalBook;
 }
