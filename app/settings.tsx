@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -12,13 +13,29 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { getApiKey, removeApiKey, saveApiKey } from '@/lib/apiKeyStorage';
+import {
+  getApiKey,
+  removeApiKey,
+  saveApiKey,
+  getOpenRouterKey,
+  saveOpenRouterKey,
+  removeOpenRouterKey,
+  getOpenRouterModel,
+  saveOpenRouterModel,
+  OPENROUTER_MODELS,
+} from '@/lib/apiKeyStorage';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const [apiKey, setApiKey] = useState('');
   const [saved, setSaved] = useState(false);
   const [hasExistingKey, setHasExistingKey] = useState(false);
+
+  const [orKey, setOrKey] = useState('');
+  const [orSaved, setOrSaved] = useState(false);
+  const [hasOrKey, setHasOrKey] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(OPENROUTER_MODELS[0].id);
+  const [showModelPicker, setShowModelPicker] = useState(false);
 
   useEffect(() => {
     getApiKey().then((key) => {
@@ -27,6 +44,13 @@ export default function SettingsScreen() {
         setHasExistingKey(true);
       }
     });
+    getOpenRouterKey().then((key) => {
+      if (key) {
+        setOrKey(key);
+        setHasOrKey(true);
+      }
+    });
+    getOpenRouterModel().then(setSelectedModel);
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -51,6 +75,31 @@ export default function SettingsScreen() {
     setHasExistingKey(false);
   }, []);
 
+  const handleSaveOrKey = useCallback(async () => {
+    const trimmed = orKey.trim();
+    if (!trimmed) {
+      if (Platform.OS === 'web') alert('Please enter a valid API key.');
+      else Alert.alert('Invalid Key', 'Please enter a valid API key.');
+      return;
+    }
+    await saveOpenRouterKey(trimmed);
+    setHasOrKey(true);
+    setOrSaved(true);
+    setTimeout(() => setOrSaved(false), 2000);
+  }, [orKey]);
+
+  const handleRemoveOrKey = useCallback(async () => {
+    await removeOpenRouterKey();
+    setOrKey('');
+    setHasOrKey(false);
+  }, []);
+
+  const handleSelectModel = useCallback(async (modelId: string) => {
+    setSelectedModel(modelId);
+    await saveOpenRouterModel(modelId);
+    setShowModelPicker(false);
+  }, []);
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Header */}
@@ -62,8 +111,8 @@ export default function SettingsScreen() {
         <View style={{ width: 24 }} />
       </View>
 
-      <View style={styles.content}>
-        {/* API Key Section */}
+      <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 32 }}>
+        {/* Gemini API Key Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Gemini API Key</Text>
@@ -103,7 +152,81 @@ export default function SettingsScreen() {
             )}
           </View>
         </View>
-      </View>
+
+        {/* OpenRouter Section */}
+        <View style={[styles.section, { marginTop: 16 }]}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>OpenRouter API Key</Text>
+          </View>
+          <Text style={styles.sectionDescription}>
+            Used for page-by-page rewrite mode. Get a key at openrouter.ai.
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Paste your OpenRouter API key here"
+            placeholderTextColor="#9ca3af"
+            value={orKey}
+            onChangeText={setOrKey}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry={false}
+          />
+
+          <View style={styles.buttonRow}>
+            <TouchableOpacity style={styles.saveButton} onPress={handleSaveOrKey}>
+              <Ionicons name={orSaved ? 'checkmark-circle' : 'save-outline'} size={18} color="#fff" />
+              <Text style={styles.saveButtonText}>{orSaved ? 'Saved!' : 'Save Key'}</Text>
+            </TouchableOpacity>
+
+            {hasOrKey && (
+              <TouchableOpacity style={styles.removeButton} onPress={handleRemoveOrKey}>
+                <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                <Text style={styles.removeButtonText}>Remove</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Model Picker */}
+          <Text style={[styles.sectionTitle, { marginTop: 20, fontSize: 15 }]}>Model</Text>
+          <TouchableOpacity
+            style={styles.modelSelector}
+            onPress={() => setShowModelPicker(!showModelPicker)}
+          >
+            <Text style={styles.modelSelectorText}>
+              {OPENROUTER_MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel}
+            </Text>
+            <Ionicons name={showModelPicker ? 'chevron-up' : 'chevron-down'} size={18} color="#6b7280" />
+          </TouchableOpacity>
+
+          {showModelPicker && (
+            <View style={styles.modelList}>
+              {OPENROUTER_MODELS.map((m) => (
+                <TouchableOpacity
+                  key={m.id}
+                  style={[
+                    styles.modelOption,
+                    m.id === selectedModel && styles.modelOptionSelected,
+                  ]}
+                  onPress={() => handleSelectModel(m.id)}
+                >
+                  <Text
+                    style={[
+                      styles.modelOptionText,
+                      m.id === selectedModel && { color: '#3b82f6', fontWeight: '600' },
+                    ]}
+                  >
+                    {m.label}
+                  </Text>
+                  {m.id === selectedModel && (
+                    <Ionicons name="checkmark" size={18} color="#3b82f6" />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -200,5 +323,45 @@ const styles = StyleSheet.create({
     color: '#ef4444',
     fontSize: 14,
     fontWeight: '500',
+  },
+  modelSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#f9fafb',
+    marginTop: 8,
+  },
+  modelSelectorText: {
+    fontSize: 14,
+    color: '#1f2937',
+  },
+  modelList: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+  },
+  modelOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  modelOptionSelected: {
+    backgroundColor: '#eff6ff',
+  },
+  modelOptionText: {
+    fontSize: 14,
+    color: '#374151',
   },
 });
