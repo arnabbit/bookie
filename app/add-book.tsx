@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { getApiKey, getOpenRouterKey, getOpenRouterModel } from '@/lib/apiKeyStorage';
 import { useBooksContext } from '@/lib/BooksContext';
 import { GeminiBookResult, pickCoverColor, processPdfWithGemini } from '@/lib/gemini';
-import { processWithOpenRouter } from '@/lib/openrouter';
+import { processWithOpenRouter, ProgressiveCallbacks } from '@/lib/openrouter';
 import { Book } from '@/types';
 
 type ProcessingMode = 'summary' | 'page-by-page';
@@ -55,7 +55,7 @@ function assembleBook(result: GeminiBookResult): Book {
 
 export default function AddBookScreen() {
   const router = useRouter();
-  const { addBook } = useBooksContext();
+  const { addBook, updateBook } = useBooksContext();
   const [state, setState] = useState<ScreenState>('idle');
   const [statusIndex, setStatusIndex] = useState(0);
   const [error, setError] = useState('');
@@ -130,15 +130,31 @@ export default function AddBookScreen() {
         fileUriRef.current = file.uri;
         setState('processing');
 
-        const orResult = await processWithOpenRouter(
-          file.uri,
-          orKey,
-          orModel,
-          (msg) => setStatusText(msg)
-        );
-        const assembled = assembleBook(orResult);
-        setBook(assembled);
-        setState('preview');
+        const bookId = Date.now();
+        const coverColor = pickCoverColor();
+        let bookAdded = false;
+
+        const callbacks: ProgressiveCallbacks = {
+          onStatus: (msg) => setStatusText(msg),
+          onFirstBook: async (partial) => {
+            const assembled = assembleBook(partial);
+            assembled.id = bookId;
+            assembled.coverColor = coverColor;
+            await addBook(assembled);
+            bookAdded = true;
+            // Navigate user to start reading immediately
+            router.replace(`/read/${bookId}` as any);
+          },
+          onBookUpdated: async (updated) => {
+            const assembled = assembleBook(updated);
+            assembled.id = bookId;
+            assembled.coverColor = coverColor;
+            await updateBook(assembled);
+          },
+        };
+
+        await processWithOpenRouter(file.uri, orKey, orModel, callbacks);
+        setState('idle');
       }
     } catch (e: any) {
       setError(e.message || 'Something went wrong processing the PDF.');

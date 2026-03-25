@@ -1,9 +1,9 @@
 import { Platform } from 'react-native';
-import * as FileSystem from 'expo-file-system';
 import { GeminiBookResult } from './gemini';
 
 const OCR_ENDPOINT = 'https://pdftotext-sof5.onrender.com/ocr';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const BATCH_SIZE = 10;
 
 // ---------- Types ----------
 
@@ -26,6 +26,12 @@ interface ChapterSummaryResult {
     title: string;
     summary: string;
   }[];
+}
+
+export interface ProgressiveCallbacks {
+  onStatus?: (msg: string) => void;
+  onFirstBook?: (book: GeminiBookResult) => void;
+  onBookUpdated?: (book: GeminiBookResult) => void;
 }
 
 // ---------- OCR ----------
@@ -71,12 +77,12 @@ function parseOcrPages(ocrText: string): ParsedPage[] {
   return pages;
 }
 
-// ---------- Batch pages into groups of 50 ----------
+// ---------- Batch pages ----------
 
-function batchPages(pages: ParsedPage[], batchSize = 50): ParsedPage[][] {
+function batchPages(pages: ParsedPage[]): ParsedPage[][] {
   const batches: ParsedPage[][] = [];
-  for (let i = 0; i < pages.length; i += batchSize) {
-    batches.push(pages.slice(i, i + batchSize));
+  for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+    batches.push(pages.slice(i, i + BATCH_SIZE));
   }
   return batches;
 }
@@ -114,7 +120,7 @@ async function callOpenRouter(
   return content;
 }
 
-// ---------- Step 1: Per-batch page summaries + chapter detection ----------
+// ---------- Per-batch page summaries + chapter detection ----------
 
 async function processBatch(
   apiKey: string,
@@ -149,7 +155,7 @@ ${pagesText}`;
   return JSON.parse(raw) as BatchResult;
 }
 
-// ---------- Step 2: Chapter-level summary from all page summaries ----------
+// ---------- Chapter-level summary from all page summaries ----------
 
 async function generateChapterSummaries(
   apiKey: string,
@@ -190,14 +196,63 @@ Respond with ONLY valid JSON:
   return JSON.parse(raw) as ChapterSummaryResult;
 }
 
-// ---------- Main pipeline ----------
+// ---------- Assemble partial book from what we have so far ----------
+
+function assemblePartialBook(
+  allPageSummaries: { page: number; summary: string }[],
+  chapterBoundaries: { title: string; startPage: number; endPage: number }[]
+): GeminiBookResult {
+  const merged = mergeChapterBoundaries(chapterBoundaries);
+
+  // If no chapters detected yet, put all pages under one chapter
+  if (merged.length === 0) {
+    return {
+      title: 'Processing...',
+      author: '',
+      quote: '',
+      tags: [],
+      chapters: [
+        {
+          title: 'Chapter 1',
+          summary: 'Processing...',
+          pages: allPageSummaries.map((p) => ({ summary: p.summary })),
+        },
+      ],
+    };
+  }
+
+  const chapters = merged.map((boundary) => {
+    const chapterPages = allPageSummaries.filter(
+      (p) => p.page >= boundary.startPage && p.page <= boundary.endPage
+    );
+    return {
+      title: boundary.title,
+      summary: 'Processing...',
+      pages: chapterPages.length > 0
+        ? chapterPages.map((p) => ({ summary: p.summary }))
+        : [{ summary: 'Processing...' }],
+    };
+  });
+
+  return {
+    title: 'Processing...',
+    author: '',
+    quote: '',
+    tags: [],
+    chapters,
+  };
+}
+
+// ---------- Main pipeline (progressive) ----------
 
 export async function processWithOpenRouter(
   fileUri: string,
   apiKey: string,
   model: string,
-  onStatus?: (msg: string) => void
+  callbacks?: ProgressiveCallbacks
 ): Promise<GeminiBookResult> {
+  const { onStatus, onFirstBook, onBookUpdated } = callbacks || {};
+
   // Step 1: OCR
   onStatus?.('Extracting text from PDF...');
   const ocrText = await ocrPdf(fileUri);
@@ -207,25 +262,35 @@ export async function processWithOpenRouter(
     throw new Error('OCR returned no pages. The PDF may be empty or unreadable.');
   }
 
-  onStatus?.(`Found ${pages.length} pages. Processing summaries...`);
+  onStatus?.(`Found ${pages.length} pages. Processing...`);
 
-  // Step 2: Batch process pages (50 at a time)
-  const batches = batchPages(pages, 50);
+  // Step 2: Batch process pages
+  const batches = batchPages(pages);
   const allPageSummaries: { page: number; summary: string }[] = [];
   const allChapterBoundaries: { title: string; startPage: number; endPage: number }[] = [];
+  let firstBookSent = false;
 
   for (let i = 0; i < batches.length; i++) {
-    onStatus?.(`Processing batch ${i + 1}/${batches.length}...`);
+    onStatus?.(`Summarizing pages ${i * BATCH_SIZE + 1}-${Math.min((i + 1) * BATCH_SIZE, pages.length)} of ${pages.length}...`);
     const result = await processBatch(apiKey, model, batches[i]);
     allPageSummaries.push(...result.pages);
     allChapterBoundaries.push(...result.chapters);
+
+    // After first batch: send partial book so user can start reading
+    if (!firstBookSent) {
+      const partial = assemblePartialBook(allPageSummaries, allChapterBoundaries);
+      onFirstBook?.(partial);
+      firstBookSent = true;
+    } else {
+      // Update book with new pages
+      const updated = assemblePartialBook(allPageSummaries, allChapterBoundaries);
+      onBookUpdated?.(updated);
+    }
   }
 
-  // Merge overlapping chapter boundaries from adjacent batches
-  const mergedChapters = mergeChapterBoundaries(allChapterBoundaries);
-
-  // Step 3: Generate chapter summaries from all page summaries
+  // Step 3: Generate chapter summaries
   onStatus?.('Generating chapter summaries...');
+  const mergedChapters = mergeChapterBoundaries(allChapterBoundaries);
   const summaryText = allPageSummaries
     .map((p) => `Page ${p.page}: ${p.summary}`)
     .join('\n');
@@ -237,8 +302,7 @@ export async function processWithOpenRouter(
     mergedChapters
   );
 
-  // Step 4: Assemble into GeminiBookResult format
-  onStatus?.('Assembling book...');
+  // Step 4: Final assembly
   const chapters = bookResult.chapters.map((ch, idx) => {
     const boundary = mergedChapters[idx];
     const chapterPages = boundary
@@ -256,13 +320,16 @@ export async function processWithOpenRouter(
     };
   });
 
-  return {
+  const finalBook: GeminiBookResult = {
     title: bookResult.title,
     author: bookResult.author,
     quote: bookResult.quote,
     tags: bookResult.tags,
     chapters,
   };
+
+  onBookUpdated?.(finalBook);
+  return finalBook;
 }
 
 // ---------- Helpers ----------
@@ -279,7 +346,6 @@ function mergeChapterBoundaries(
     const prev = merged[merged.length - 1];
     const curr = sorted[i];
 
-    // If same title or overlapping, merge
     if (
       curr.title.toLowerCase() === prev.title.toLowerCase() ||
       curr.startPage <= prev.endPage + 1
