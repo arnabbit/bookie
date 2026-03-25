@@ -5,7 +5,7 @@ import { Book, Chapter, Page } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useRef, useState } from 'react';
-import { FlatList, ListRenderItem, StatusBar, StyleSheet, Text, TouchableOpacity, View, ViewToken } from 'react-native';
+import { FlatList, ListRenderItem, Pressable, StatusBar, StyleSheet, Text, TouchableOpacity, View, ViewToken } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 
@@ -17,6 +17,7 @@ export default function ChapterDetailsScreen() {
     const { id, chapterId } = useLocalSearchParams();
     const router = useRouter();
     const [maxIndex, setMaxIndex] = useState(0);
+    const [currentPageIndex, setCurrentPageIndex] = useState(0);
     const [listHeight, setListHeight] = useState(0);
 
     const { books } = useBooksContext();
@@ -44,6 +45,7 @@ export default function ChapterDetailsScreen() {
         if (viewableItems.length > 0) {
             const index = viewableItems[0].index;
             if (index != null) {
+                setCurrentPageIndex(index);
                 setMaxIndex(prev => {
                     const next = Math.max(prev || 0, index);
                     return next === prev ? prev : next;
@@ -135,6 +137,23 @@ export default function ChapterDetailsScreen() {
             </View>
 
             <ProgressBar progress={progress} />
+
+            {/* Chat FAB */}
+            <Pressable
+                style={styles.chatFab}
+                onPress={() =>
+                    router.push({
+                        pathname: '/chat',
+                        params: {
+                            bookId: String(book.id),
+                            chapterId: String(chapter.id),
+                            pageIndex: String(currentPageIndex),
+                        },
+                    } as any)
+                }
+            >
+                <Ionicons name="chatbubble-ellipses-outline" size={24} color="#fff" />
+            </Pressable>
         </SafeAreaView>
     );
 }
@@ -202,5 +221,21 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 16,
         fontWeight: '600',
+    },
+    chatFab: {
+        position: 'absolute',
+        bottom: 32,
+        right: 24,
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: '#3b82f6',
+        justifyContent: 'center',
+        alignItems: 'center',
+        elevation: 4,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 6,
     },
 });

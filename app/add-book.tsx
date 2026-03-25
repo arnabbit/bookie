@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { getApiKey, getOpenRouterKey, getOpenRouterModel } from '@/lib/apiKeyStorage';
 import { useBooksContext } from '@/lib/BooksContext';
 import { GeminiBookResult, pickCoverColor, processPdfWithGemini } from '@/lib/gemini';
-import { processWithOpenRouter, ProgressiveCallbacks } from '@/lib/openrouter';
+import { processWithOpenRouter, ProgressiveCallbacks, OpenRouterBookResult } from '@/lib/openrouter';
 import { Book } from '@/types';
 
 type ProcessingMode = 'summary' | 'page-by-page';
@@ -136,6 +136,16 @@ export default function AddBookScreen() {
 
         const bookTitle = file.name.replace(/\.pdf$/i, '');
 
+        const applyOcrText = (assembled: Book, result: OpenRouterBookResult) => {
+          if (result.ocrPages && assembled.chapters.length > 0) {
+            assembled.chapters[0].pages.forEach((page, idx) => {
+              if (result.ocrPages && result.ocrPages[idx]) {
+                page.originalText = result.ocrPages[idx].text;
+              }
+            });
+          }
+        };
+
         const callbacks: ProgressiveCallbacks = {
           bookTitle,
           onStatus: (msg) => setStatusText(msg),
@@ -144,9 +154,9 @@ export default function AddBookScreen() {
             assembled.id = bookId;
             assembled.coverColor = coverColor;
             assembled.mode = 'page-by-page';
+            applyOcrText(assembled, partial);
             await addBook(assembled);
             bookAdded = true;
-            // Navigate directly to pages (chapter 1)
             router.replace(`/read/${bookId}/chapter/1` as any);
           },
           onBookUpdated: async (updated) => {
@@ -154,6 +164,7 @@ export default function AddBookScreen() {
             assembled.id = bookId;
             assembled.coverColor = coverColor;
             assembled.mode = 'page-by-page';
+            applyOcrText(assembled, updated);
             await updateBook(assembled);
           },
         };

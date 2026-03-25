@@ -16,10 +16,14 @@ interface BatchResult {
   pages: { page: number; summary: string }[];
 }
 
+export interface OpenRouterBookResult extends GeminiBookResult {
+  ocrPages?: { pageNum: number; text: string }[];
+}
+
 export interface ProgressiveCallbacks {
   onStatus?: (msg: string) => void;
-  onFirstBook?: (book: GeminiBookResult) => void;
-  onBookUpdated?: (book: GeminiBookResult) => void;
+  onFirstBook?: (book: OpenRouterBookResult) => void;
+  onBookUpdated?: (book: OpenRouterBookResult) => void;
   bookTitle?: string;
 }
 
@@ -154,9 +158,10 @@ ${pagesText}`;
 
 function assemblePageByPageBook(
   allPageSummaries: { page: number; summary: string }[],
+  ocrPages: ParsedPage[],
   title: string,
   done: boolean
-): GeminiBookResult {
+): OpenRouterBookResult {
   return {
     title: done ? title : `${title} (processing...)`,
     author: '',
@@ -169,6 +174,7 @@ function assemblePageByPageBook(
         pages: allPageSummaries.map((p) => ({ summary: p.summary })),
       },
     ],
+    ocrPages: ocrPages.map((p) => ({ pageNum: p.pageNum, text: p.text })),
   };
 }
 
@@ -179,7 +185,7 @@ export async function processWithOpenRouter(
   apiKey: string,
   model: string,
   callbacks?: ProgressiveCallbacks
-): Promise<GeminiBookResult> {
+): Promise<OpenRouterBookResult> {
   const { onStatus, onFirstBook, onBookUpdated, bookTitle } = callbacks || {};
   const title = bookTitle || 'Untitled';
 
@@ -204,7 +210,7 @@ export async function processWithOpenRouter(
     const result = await processBatch(apiKey, model, batches[i]);
     allPageSummaries.push(...result.pages);
 
-    const book = assemblePageByPageBook(allPageSummaries, title, false);
+    const book = assemblePageByPageBook(allPageSummaries, pages, title, false);
 
     if (!firstBookSent) {
       onFirstBook?.(book);
@@ -214,7 +220,7 @@ export async function processWithOpenRouter(
     }
   }
 
-  const finalBook = assemblePageByPageBook(allPageSummaries, title, true);
+  const finalBook = assemblePageByPageBook(allPageSummaries, pages, title, true);
   onBookUpdated?.(finalBook);
   return finalBook;
 }

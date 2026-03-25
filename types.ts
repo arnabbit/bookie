@@ -1,6 +1,7 @@
 export interface Page {
     id: number;
     summary: string;
+    originalText?: string;
 }
 
 export interface Chapter {
