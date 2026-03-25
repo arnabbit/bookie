@@ -3,8 +3,6 @@ import { GeminiBookResult } from './gemini';
 
 const OCR_ENDPOINT = 'https://pdftotext-sof5.onrender.com/ocr';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const BATCH_SIZE = 10;
-
 // ---------- Types ----------
 
 interface ParsedPage {
@@ -12,8 +10,8 @@ interface ParsedPage {
   text: string;
 }
 
-interface BatchResult {
-  pages: { page: number; summary: string }[];
+interface PageSummaryResult {
+  summary: string;
 }
 
 export interface OpenRouterBookResult extends GeminiBookResult {
@@ -70,15 +68,6 @@ function parseOcrPages(ocrText: string): ParsedPage[] {
   return pages;
 }
 
-// ---------- Batch pages ----------
-
-function batchPages(pages: ParsedPage[]): ParsedPage[][] {
-  const batches: ParsedPage[][] = [];
-  for (let i = 0; i < pages.length; i += BATCH_SIZE) {
-    batches.push(pages.slice(i, i + BATCH_SIZE));
-  }
-  return batches;
-}
 
 // ---------- OpenRouter call ----------
 
@@ -124,34 +113,35 @@ async function callOpenRouter(
   }
 }
 
-// ---------- Per-batch page summaries + chapter detection ----------
+// ---------- Single page summary with context ----------
 
-async function processBatch(
+async function summarizePage(
   apiKey: string,
   model: string,
-  batch: ParsedPage[]
-): Promise<BatchResult> {
-  const pagesText = batch
-    .map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`)
-    .join('\n\n');
+  pages: ParsedPage[],
+  index: number
+): Promise<string> {
+  const prev = index > 0 ? pages[index - 1] : null;
+  const curr = pages[index];
+  const next = index < pages.length - 1 ? pages[index + 1] : null;
 
-  const prompt = `You are given pages from a book with "Page X start" / "Page X end" markers.
+  let context = '';
+  if (prev) context += `--- Previous page (for context only, do NOT summarize) ---\n${prev.text}\n\n`;
+  context += `--- CURRENT PAGE (summarize ONLY this) ---\n${curr.text}\n\n`;
+  if (next) context += `--- Next page (for context only, do NOT summarize) ---\n${next.text}\n\n`;
 
-For each page, write a 50-70 word summary that rewrites the page content concisely while preserving the key points.
+  const prompt = `You are summarizing a book page by page. Below you are given the CURRENT PAGE along with the previous and next pages for context.
+
+Write a 50-70 word summary of ONLY the CURRENT PAGE. Do NOT include information from the previous or next pages. Only describe what is explicitly written on the current page.
+
+${context}
 
 Respond with ONLY valid JSON:
-{
-  "pages": [
-    { "page": number, "summary": "50-70 word rewrite" }
-  ]
-}
-
-Here are the pages:
-
-${pagesText}`;
+{ "summary": "50-70 word summary of the current page only" }`;
 
   const raw = await callOpenRouter(apiKey, model, prompt);
-  return JSON.parse(raw) as BatchResult;
+  const result = JSON.parse(raw) as PageSummaryResult;
+  return result.summary;
 }
 
 // ---------- Assemble book: all pages under one chapter ----------
@@ -200,22 +190,22 @@ export async function processWithOpenRouter(
 
   onStatus?.(`Found ${pages.length} pages. Processing...`);
 
-  // Step 2: Batch process pages
-  const batches = batchPages(pages);
+  // Step 2: Process one page at a time with prev/next context
   const allPageSummaries: { page: number; summary: string }[] = [];
   let firstBookSent = false;
 
-  for (let i = 0; i < batches.length; i++) {
-    onStatus?.(`Summarizing pages ${i * BATCH_SIZE + 1}-${Math.min((i + 1) * BATCH_SIZE, pages.length)} of ${pages.length}...`);
-    const result = await processBatch(apiKey, model, batches[i]);
-    allPageSummaries.push(...result.pages);
+  for (let i = 0; i < pages.length; i++) {
+    onStatus?.(`Summarizing page ${i + 1} of ${pages.length}...`);
+    const summary = await summarizePage(apiKey, model, pages, i);
+    allPageSummaries.push({ page: pages[i].pageNum, summary });
 
     const book = assemblePageByPageBook(allPageSummaries, pages, title, false);
 
     if (!firstBookSent) {
       onFirstBook?.(book);
       firstBookSent = true;
-    } else {
+    } else if (i % 3 === 0) {
+      // Update every 3 pages to avoid excessive storage writes
       onBookUpdated?.(book);
     }
   }
