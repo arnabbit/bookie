@@ -14,6 +14,14 @@ export async function saveUserBook(book: Book): Promise<void> {
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
 }
 
+export async function updateUserBook(book: Book): Promise<void> {
+  const existing = await loadUserBooks();
+  const idx = existing.findIndex(b => b.id === book.id);
+  if (idx >= 0) existing[idx] = book;
+  else existing.push(book);
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
+}
+
 export async function deleteUserBook(bookId: number): Promise<void> {
   const existing = await loadUserBooks();
   const filtered = existing.filter(b => b.id !== bookId);

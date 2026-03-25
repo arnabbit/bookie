@@ -4,7 +4,7 @@ import ProgressBar from '@/components/ProgressBar';
 import { Book, Chapter } from '@/types';
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, ListRenderItem, Platform, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View, ViewToken } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -34,6 +34,13 @@ export default function ReadScreen() {
     );
 
     const book = useMemo(() => books.find((b: Book) => b.id === Number(id)), [id, books]);
+
+    // Page-by-page books skip chapter view, go directly to pages
+    useEffect(() => {
+        if (book?.mode === 'page-by-page' && book.chapters.length > 0) {
+            router.replace(`/read/${id}/chapter/${book.chapters[0].id}` as any);
+        }
+    }, [book?.mode, book?.chapters.length]);
 
     const recommendations = useMemo(() => {
         if (!book) return [];

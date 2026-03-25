@@ -12,10 +12,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { getApiKey } from '@/lib/apiKeyStorage';
+import { getApiKey, getOpenRouterKey, getOpenRouterModel } from '@/lib/apiKeyStorage';
 import { useBooksContext } from '@/lib/BooksContext';
 import { GeminiBookResult, pickCoverColor, processPdfWithGemini } from '@/lib/gemini';
+import { processWithOpenRouter, ProgressiveCallbacks } from '@/lib/openrouter';
 import { Book } from '@/types';
+
+type ProcessingMode = 'summary' | 'page-by-page';
 
 type ScreenState = 'idle' | 'processing' | 'preview' | 'error';
 
@@ -52,12 +55,14 @@ function assembleBook(result: GeminiBookResult): Book {
 
 export default function AddBookScreen() {
   const router = useRouter();
-  const { addBook } = useBooksContext();
+  const { addBook, updateBook } = useBooksContext();
   const [state, setState] = useState<ScreenState>('idle');
   const [statusIndex, setStatusIndex] = useState(0);
   const [error, setError] = useState('');
   const [book, setBook] = useState<Book | null>(null);
   const [fileName, setFileName] = useState('');
+  const [mode, setMode] = useState<ProcessingMode>('summary');
+  const [statusText, setStatusText] = useState('');
   const fileUriRef = useRef('');
   const timerRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
@@ -77,42 +82,90 @@ export default function AddBookScreen() {
 
   const pickAndProcess = useCallback(async () => {
     try {
-      const apiKey = await getApiKey();
-      if (!apiKey) {
-        setMissingKey(true);
-        return;
+      if (mode === 'summary') {
+        const apiKey = await getApiKey();
+        if (!apiKey) { setMissingKey(true); return; }
+
+        const result = await DocumentPicker.getDocumentAsync({
+          type: 'application/pdf',
+          copyToCacheDirectory: true,
+        });
+        if (result.canceled) return;
+        const file = result.assets[0];
+        if (!file) return;
+
+        if (file.size && file.size > 20 * 1024 * 1024) {
+          setError('PDF is too large. Maximum size is 20MB.');
+          setState('error');
+          return;
+        }
+
+        setFileName(file.name);
+        fileUriRef.current = file.uri;
+        setState('processing');
+
+        const geminiResult = await processPdfWithGemini(file.uri, apiKey);
+        const assembled = assembleBook(geminiResult);
+        setBook(assembled);
+        setState('preview');
+      } else {
+        // Page-by-page mode via OpenRouter
+        const orKey = await getOpenRouterKey();
+        if (!orKey) {
+          setError('OpenRouter API key required. Add it in Settings.');
+          setState('error');
+          return;
+        }
+        const orModel = await getOpenRouterModel();
+
+        const result = await DocumentPicker.getDocumentAsync({
+          type: 'application/pdf',
+          copyToCacheDirectory: true,
+        });
+        if (result.canceled) return;
+        const file = result.assets[0];
+        if (!file) return;
+
+        setFileName(file.name);
+        fileUriRef.current = file.uri;
+        setState('processing');
+
+        const bookId = Date.now();
+        const coverColor = pickCoverColor();
+        let bookAdded = false;
+
+        const bookTitle = file.name.replace(/\.pdf$/i, '');
+
+        const callbacks: ProgressiveCallbacks = {
+          bookTitle,
+          onStatus: (msg) => setStatusText(msg),
+          onFirstBook: async (partial) => {
+            const assembled = assembleBook(partial);
+            assembled.id = bookId;
+            assembled.coverColor = coverColor;
+            assembled.mode = 'page-by-page';
+            await addBook(assembled);
+            bookAdded = true;
+            // Navigate directly to pages (chapter 1)
+            router.replace(`/read/${bookId}/chapter/1` as any);
+          },
+          onBookUpdated: async (updated) => {
+            const assembled = assembleBook(updated);
+            assembled.id = bookId;
+            assembled.coverColor = coverColor;
+            assembled.mode = 'page-by-page';
+            await updateBook(assembled);
+          },
+        };
+
+        await processWithOpenRouter(file.uri, orKey, orModel, callbacks);
+        setState('idle');
       }
-
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        copyToCacheDirectory: true,
-      });
-
-      if (result.canceled) return;
-
-      const file = result.assets[0];
-      if (!file) return;
-
-      // Check file size (20MB limit for Gemini inline data)
-      if (file.size && file.size > 20 * 1024 * 1024) {
-        setError('PDF is too large. Maximum size is 20MB.');
-        setState('error');
-        return;
-      }
-
-      setFileName(file.name);
-      fileUriRef.current = file.uri;
-      setState('processing');
-
-      const geminiResult = await processPdfWithGemini(file.uri, apiKey);
-      const assembled = assembleBook(geminiResult);
-      setBook(assembled);
-      setState('preview');
     } catch (e: any) {
       setError(e.message || 'Something went wrong processing the PDF.');
       setState('error');
     }
-  }, []);
+  }, [mode]);
 
   const handleAddToLibrary = useCallback(async () => {
     if (!book) return;
@@ -144,6 +197,32 @@ export default function AddBookScreen() {
           <Text style={styles.idleSubtitle}>
             Select a book PDF and we'll generate a readable summary with chapters
           </Text>
+
+          {/* Mode Toggle */}
+          <View style={styles.modeToggle}>
+            <TouchableOpacity
+              style={[styles.modeOption, mode === 'summary' && styles.modeOptionActive]}
+              onPress={() => setMode('summary')}
+            >
+              <Text style={[styles.modeText, mode === 'summary' && styles.modeTextActive]}>
+                Summary
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modeOption, mode === 'page-by-page' && styles.modeOptionActive]}
+              onPress={() => setMode('page-by-page')}
+            >
+              <Text style={[styles.modeText, mode === 'page-by-page' && styles.modeTextActive]}>
+                Page-by-Page
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.modeHint}>
+            {mode === 'summary'
+              ? 'Gemini generates narrative summaries per chapter'
+              : 'OCR + OpenRouter rewrites each page in 30-50 words'}
+          </Text>
+
           <TouchableOpacity style={styles.uploadButton} onPress={pickAndProcess}>
             <Ionicons name="cloud-upload-outline" size={20} color="#fff" />
             <Text style={styles.uploadButtonText}>Select PDF</Text>
@@ -155,7 +234,9 @@ export default function AddBookScreen() {
         <View style={styles.centered}>
           <ActivityIndicator size="large" color="#3b82f6" />
           <Text style={styles.processingFile}>{fileName}</Text>
-          <Text style={styles.processingStatus}>{STATUS_MESSAGES[statusIndex]}</Text>
+          <Text style={styles.processingStatus}>
+            {mode === 'page-by-page' && statusText ? statusText : STATUS_MESSAGES[statusIndex]}
+          </Text>
         </View>
       )}
 
@@ -372,5 +453,34 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 32,
     lineHeight: 20,
+  },
+  modeToggle: {
+    flexDirection: 'row',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 8,
+  },
+  modeOption: {
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+  },
+  modeOptionActive: {
+    backgroundColor: '#3b82f6',
+  },
+  modeText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6b7280',
+  },
+  modeTextActive: {
+    color: '#fff',
+  },
+  modeHint: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'center',
+    marginBottom: 24,
   },
 });
