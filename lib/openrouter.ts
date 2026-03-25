@@ -20,6 +20,7 @@ export interface ProgressiveCallbacks {
   onStatus?: (msg: string) => void;
   onFirstBook?: (book: GeminiBookResult) => void;
   onBookUpdated?: (book: GeminiBookResult) => void;
+  bookTitle?: string;
 }
 
 // ---------- OCR ----------
@@ -82,30 +83,41 @@ async function callOpenRouter(
   model: string,
   prompt: string
 ): Promise<string> {
-  const response = await fetch(OPENROUTER_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://bookie.app',
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-      stream: false,
-      response_format: { type: 'json_object' },
-    }),
-  });
+  let attempt = 0;
 
-  if (!response.ok) {
-    throw new Error(`OpenRouter error (${response.status}): ${await response.text()}`);
+  while (true) {
+    attempt++;
+    try {
+      const response = await fetch(OPENROUTER_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://bookie.app',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+          stream: false,
+          response_format: { type: 'json_object' },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenRouter error (${response.status}): ${await response.text()}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (!content) throw new Error('Empty response from OpenRouter');
+      return content;
+    } catch (e) {
+      const delay = Math.min(2000 * Math.pow(2, attempt - 1), 30000);
+      console.warn(`OpenRouter attempt ${attempt} failed, retrying in ${delay}ms...`, e);
+      await new Promise((r) => setTimeout(r, delay));
+    }
   }
-
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error('Empty response from OpenRouter');
-  return content;
 }
 
 // ---------- Per-batch page summaries + chapter detection ----------
@@ -141,10 +153,12 @@ ${pagesText}`;
 // ---------- Assemble book: all pages under one chapter ----------
 
 function assemblePageByPageBook(
-  allPageSummaries: { page: number; summary: string }[]
+  allPageSummaries: { page: number; summary: string }[],
+  title: string,
+  done: boolean
 ): GeminiBookResult {
   return {
-    title: 'Processing...',
+    title: done ? title : `${title} (processing...)`,
     author: '',
     quote: '',
     tags: [],
@@ -166,7 +180,8 @@ export async function processWithOpenRouter(
   model: string,
   callbacks?: ProgressiveCallbacks
 ): Promise<GeminiBookResult> {
-  const { onStatus, onFirstBook, onBookUpdated } = callbacks || {};
+  const { onStatus, onFirstBook, onBookUpdated, bookTitle } = callbacks || {};
+  const title = bookTitle || 'Untitled';
 
   // Step 1: OCR
   onStatus?.('Extracting text from PDF...');
@@ -189,7 +204,7 @@ export async function processWithOpenRouter(
     const result = await processBatch(apiKey, model, batches[i]);
     allPageSummaries.push(...result.pages);
 
-    const book = assemblePageByPageBook(allPageSummaries);
+    const book = assemblePageByPageBook(allPageSummaries, title, false);
 
     if (!firstBookSent) {
       onFirstBook?.(book);
@@ -199,7 +214,7 @@ export async function processWithOpenRouter(
     }
   }
 
-  const finalBook = assemblePageByPageBook(allPageSummaries);
+  const finalBook = assemblePageByPageBook(allPageSummaries, title, true);
   onBookUpdated?.(finalBook);
   return finalBook;
 }

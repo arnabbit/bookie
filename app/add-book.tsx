@@ -134,7 +134,10 @@ export default function AddBookScreen() {
         const coverColor = pickCoverColor();
         let bookAdded = false;
 
+        const bookTitle = file.name.replace(/\.pdf$/i, '');
+
         const callbacks: ProgressiveCallbacks = {
+          bookTitle,
           onStatus: (msg) => setStatusText(msg),
           onFirstBook: async (partial) => {
             const assembled = assembleBook(partial);
