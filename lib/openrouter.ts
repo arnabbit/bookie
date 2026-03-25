@@ -80,6 +80,9 @@ async function callOpenRouter(
 
   while (true) {
     attempt++;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
     try {
       const response = await fetch(OPENROUTER_ENDPOINT, {
         method: 'POST',
@@ -91,10 +94,11 @@ async function callOpenRouter(
         body: JSON.stringify({
           model,
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
+          temperature: 0.4,
           stream: false,
           response_format: { type: 'json_object' },
         }),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -109,11 +113,17 @@ async function callOpenRouter(
       const delay = Math.min(2000 * Math.pow(2, attempt - 1), 30000);
       console.warn(`OpenRouter attempt ${attempt} failed, retrying in ${delay}ms...`, e);
       await new Promise((r) => setTimeout(r, delay));
+    } finally {
+      clearTimeout(timeout);
     }
   }
 }
 
 // ---------- Single page summary with context ----------
+
+function lastWords(text: string, n: number): string {
+  return text.split(/\s+/).slice(-n).join(' ');
+}
 
 async function summarizePage(
   apiKey: string,
@@ -122,30 +132,30 @@ async function summarizePage(
   index: number,
   prevSummary: string | null
 ): Promise<string> {
-  const prev = index > 0 ? pages[index - 1] : null;
   const curr = pages[index];
   const next = index < pages.length - 1 ? pages[index + 1] : null;
 
-  let context = '';
-  if (prevSummary) context += `--- Your previous summary (continue from here) ---\n${prevSummary}\n\n`;
-  if (prev) context += `--- Previous page original text (for understanding only) ---\n${prev.text}\n\n`;
-  context += `--- CURRENT PAGE (retell ONLY this) ---\n${curr.text}\n\n`;
-  if (next) context += `--- Next page (for context only) ---\n${next.text}\n\n`;
+  // Current page text goes FIRST — this is what the model should focus on
+  let context = `=== TEXT TO SUMMARIZE ===\n${curr.text}\n\n`;
+  if (next) context += `=== NEXT PAGE (for context only, do NOT summarize) ===\n${next.text}\n\n`;
 
-  const prompt = `You are retelling a book as a continuous narrative, one page at a time. Your goal is to create a flowing story that reads like a condensed version of the book — not isolated page summaries.
+  // Only pass a brief continuity hint, not the full previous summary
+  const continuity = prevSummary
+    ? `\nThe narrative so far ended with: "...${lastWords(prevSummary, 12)}"\nPick up from there. Do NOT repeat any of that.`
+    : '\nThis is the first page. Set the scene.';
+
+  const prompt = `Retell the TEXT TO SUMMARIZE below in 50-70 words of vivid, engaging narrative prose.
+${continuity}
 
 Rules:
-- Retell ONLY what happens on the CURRENT PAGE in 50-70 words
-- Continue naturally from where your previous summary left off — do not repeat or re-introduce what was already covered
-- Write in the author's voice and style — vivid, engaging, narrative prose
-- Never start with "This page..." or "The author..." — write as if you are the storyteller
-- Do NOT include events from previous or next pages
-- End in a way that flows into whatever comes next
+- Your summary must contain ONLY NEW information from the text above
+- Do NOT repeat, rephrase, or re-introduce anything already covered
+- Write as the storyteller — never say "this page", "the text", "the author"
+- Stay faithful to what is written — no invented details
 
 ${context}
-
 Respond with ONLY valid JSON:
-{ "summary": "50-70 word narrative continuation" }`;
+{ "summary": "50-70 word narrative" }`;
 
   const raw = await callOpenRouter(apiKey, model, prompt);
   const result = JSON.parse(raw) as PageSummaryResult;
