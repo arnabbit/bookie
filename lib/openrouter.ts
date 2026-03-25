@@ -99,6 +99,7 @@ async function callOpenRouter(
       model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
+      stream: false,
       response_format: { type: 'json_object' },
     }),
   });
