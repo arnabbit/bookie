@@ -1,26 +1,46 @@
 import { Ionicons } from '@expo/vector-icons';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import 'react-native-reanimated';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { BooksProvider } from '@/lib/BooksContext';
+import { AuthProvider, useAuth } from '@/lib/AuthContext';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
 }
 
 export const unstable_settings = {
-  anchor: '(tabs)',
+  initialRouteName: '(tabs)',
 };
 
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  const { user, token, isLoading } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    const inAuthGroup = segments[0] === 'auth';
+
+    if (!token && !inAuthGroup) {
+      router.replace('/auth/login');
+    } else if (token && inAuthGroup) {
+      router.replace('/(tabs)/books');
+    }
+  }, [user, token, isLoading, segments]);
+
+  if (isLoading) return null;
+
+  return <>{children}</>;
+}
+
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
   const [loaded] = useFonts({
     ...Ionicons.font,
   });
@@ -28,8 +48,6 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (Platform.OS === 'web' && loaded) {
-      // On Safari/iOS/Firefox, expo-font resolves immediately before the font
-      // is actually available. Wait for document.fonts to confirm readiness.
       document.fonts.ready.then(() => setFontReady(true));
     }
   }, [loaded]);
@@ -45,16 +63,18 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <BooksProvider>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="add-book" options={{ presentation: 'modal', headerShown: false }} />
-          <Stack.Screen name="settings" options={{ headerShown: false }} />
-          <Stack.Screen name="help" options={{ headerShown: false }} />
-          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        </Stack>
-      </BooksProvider>
+    <ThemeProvider value={DefaultTheme}>
+      <AuthProvider>
+        <AuthGuard>
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="auth" options={{ headerShown: false }} />
+            <Stack.Screen name="chat" options={{ headerShown: false }} />
+            <Stack.Screen name="conversations" options={{ headerShown: false }} />
+            <Stack.Screen name="book-picker" options={{ headerShown: true, title: 'Share Page', presentation: 'modal' }} />
+          </Stack>
+        </AuthGuard>
+      </AuthProvider>
       <StatusBar style="auto" />
     </ThemeProvider>
   );

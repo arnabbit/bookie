@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Booksocial - Redirecting...</title>
+  <style>
+    body { display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #f5f5f5; font-family: system-ui; }
+    .loader { text-align: center; }
+    .spinner { width: 40px; height: 40px; border: 3px solid #ddd; border-top-color: #6366f1; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    p { color: #666; margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="loader">
+    <div class="spinner"></div>
+    <p>Redirecting to app...</p>
+  </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const user = params.get('user');
+
+    const redirectUrl = new URL('bookie://auth/success');
+    if (token) redirectUrl.searchParams.set('token', token);
+    if (user) redirectUrl.searchParams.set('user', user);
+
+    // If in an in-app browser / WebView, use the deep link scheme
+    if (window.ReactNativeWebView) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ token, user }));
+    } else {
+      window.location.href = redirectUrl.toString();
+    }
+  </script>
+</body>
+</html>
