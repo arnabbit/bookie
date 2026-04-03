@@ -22,10 +22,12 @@ export default function LoginScreen() {
   const [captchaId, setCaptchaId] = useState('');
   const [captchaAnswer, setCaptchaAnswer] = useState('');
   const [loading, setLoading] = useState(false);
+  const [captchaLoading, setCaptchaLoading] = useState(true);
   const [error, setError] = useState('');
   const { login } = useAuth();
 
   const fetchCaptcha = async () => {
+    setCaptchaLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/auth/captcha`, { method: 'POST' });
       if (res.ok) {
@@ -36,6 +38,8 @@ export default function LoginScreen() {
       }
     } catch {
       setError('Failed to load captcha');
+    } finally {
+      setCaptchaLoading(false);
     }
   };
 
@@ -132,9 +136,13 @@ export default function LoginScreen() {
           <Text style={styles.label}>Verification</Text>
           <View style={styles.captchaRow}>
             <View style={styles.captchaBox}>
-              <Text style={styles.captchaText}>
-                {captchaQuestion || '...'}
-              </Text>
+              {captchaLoading ? (
+                <ActivityIndicator size="small" color={colors.tertiary} />
+              ) : (
+                <Text style={styles.captchaText}>
+                  {captchaQuestion}
+                </Text>
+              )}
             </View>
             <TextInput
               style={styles.captchaInput}
