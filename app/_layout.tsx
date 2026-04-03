@@ -4,8 +4,8 @@ import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import { Platform } from 'react-native';
+import { useEffect, useState, useCallback } from 'react';
+import { Platform, View, ActivityIndicator } from 'react-native';
 import 'react-native-reanimated';
 
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
@@ -31,7 +31,7 @@ export const unstable_settings = {
 };
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { user, token, isLoading } = useAuth();
+  const { token, isLoading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
@@ -45,9 +45,19 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     } else if (token && inAuthGroup) {
       router.replace('/(tabs)/books' as any);
     }
-  }, [user, token, isLoading, segments]);
+  }, [token, isLoading, segments]);
 
-  if (isLoading) return null;
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: AtelierTheme.colors.background, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={AtelierTheme.colors.primary} />
+      </View>
+    );
+  }
+
+  // Prevent mounting protected screens while redirecting to login
+  const inAuthGroup = segments[0] === ('auth' as any);
+  if (!token && !inAuthGroup) return null;
 
   return <>{children}</>;
 }
@@ -73,11 +83,13 @@ export default function RootLayout() {
     }
   }, [loaded]);
 
-  useEffect(() => {
-    if (loaded && Platform.OS !== 'web') {
-      SplashScreen.hideAsync();
+  const { isLoading } = useAuth();
+
+  const onLayoutRootView = useCallback(async () => {
+    if (loaded && fontReady && !isLoading && Platform.OS !== 'web') {
+      await SplashScreen.hideAsync();
     }
-  }, [loaded]);
+  }, [loaded, fontReady, isLoading]);
 
   if (!loaded || !fontReady) {
     return null;
@@ -86,16 +98,18 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={AtelierTheme}>
       <AuthProvider>
-        <AuthGuard>
-          <Stack>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="auth" options={{ headerShown: false }} />
-            <Stack.Screen name="chat" options={{ headerShown: false }} />
-            <Stack.Screen name="conversations" options={{ headerShown: false }} />
-            <Stack.Screen name="book-picker" options={{ headerShown: true, title: 'Share Page', presentation: 'modal' }} />
-            <Stack.Screen name="admin" options={{ headerShown: false }} />
-          </Stack>
-        </AuthGuard>
+        <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
+          <AuthGuard>
+            <Stack>
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="auth" options={{ headerShown: false }} />
+              <Stack.Screen name="chat" options={{ headerShown: false }} />
+              <Stack.Screen name="conversations" options={{ headerShown: false }} />
+              <Stack.Screen name="book-picker" options={{ headerShown: true, title: 'Share Page', presentation: 'modal' }} />
+              <Stack.Screen name="admin" options={{ headerShown: false }} />
+            </Stack>
+          </AuthGuard>
+        </View>
       </AuthProvider>
       <StatusBar style="auto" />
     </ThemeProvider>
