@@ -14,6 +14,7 @@ const messageSchema = new mongoose.Schema({
     bookTitle: String,
     pageNumber: Number,
     content: String,
+    format: String,
   },
   createdAt: { type: Date, default: Date.now },
 });
