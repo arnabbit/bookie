@@ -57,7 +57,7 @@ export default function SocialScreen() {
     } catch { /* ignore */ }
   }, [token]);
 
-  useFocusEffect(fetchData);
+  useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);

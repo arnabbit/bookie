@@ -22,7 +22,7 @@ interface Message {
   content: string;
   type: 'text' | 'book-share';
   sender: { _id: string; username: string; avatar?: string };
-  sharedBookPage?: { book: string; bookTitle: string; pageNumber: number; content: string };
+  sharedBookPage?: { book: string; bookTitle: string; pageNumber: number; content: string; format?: string };
   createdAt: string;
 }
 
@@ -299,9 +299,9 @@ const styles = StyleSheet.create({
     borderLeftColor: colors.secondaryContainer,
     ...shadows.sm,
   },
-  textMine: { fontFamily: fonts.body, fontSize: 14, color: colors.onPrimaryContainer, lineHeight: 20 },
+  textMine: { fontFamily: fonts.body, fontSize: 14, color: colors.surface, lineHeight: 20 },
   textTheirs: { fontFamily: fonts.body, fontSize: 14, color: colors.onSurface, lineHeight: 20 },
-  timeMine: { fontFamily: fonts.body, fontSize: 9, color: colors.onPrimaryContainer + '99', marginTop: 4, alignSelf: 'flex-end' as const },
+  timeMine: { fontFamily: fonts.body, fontSize: 9, color: colors.surface + '99', marginTop: 4, alignSelf: 'flex-end' as const },
   timeTheirs: { fontFamily: fonts.body, fontSize: 9, color: colors.onSurfaceVariant, marginTop: 4, alignSelf: 'flex-end' as const },
 
   // Book share card

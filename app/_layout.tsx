@@ -38,12 +38,12 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isLoading) return;
 
-    const inAuthGroup = segments[0] === 'auth';
+    const inAuthGroup = segments[0] === ('auth' as any);
 
     if (!token && !inAuthGroup) {
-      router.replace('/auth/login');
+      router.replace('/auth/login' as any);
     } else if (token && inAuthGroup) {
-      router.replace('/(tabs)/books');
+      router.replace('/(tabs)/books' as any);
     }
   }, [user, token, isLoading, segments]);
 
