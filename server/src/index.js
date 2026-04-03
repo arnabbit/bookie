@@ -14,6 +14,7 @@ const bookRoutes = require('./routes/books');
 const friendRoutes = require('./routes/friends');
 const chatRoutes = require('./routes/chat');
 const commentRoutes = require('./routes/comments');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 const server = http.createServer(app);
@@ -38,6 +39,7 @@ app.use('/api/books', bookRoutes);
 app.use('/api/comments', commentRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Socket.io for real-time chat
 const io = new Server(server, {

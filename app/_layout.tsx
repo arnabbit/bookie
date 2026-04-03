@@ -93,6 +93,7 @@ export default function RootLayout() {
             <Stack.Screen name="chat" options={{ headerShown: false }} />
             <Stack.Screen name="conversations" options={{ headerShown: false }} />
             <Stack.Screen name="book-picker" options={{ headerShown: true, title: 'Share Page', presentation: 'modal' }} />
+            <Stack.Screen name="admin" options={{ headerShown: false }} />
           </Stack>
         </AuthGuard>
       </AuthProvider>

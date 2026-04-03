@@ -28,6 +28,7 @@ const userSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   lastSeen: { type: Date, default: Date.now },
   isOnline: { type: Boolean, default: false },
+  isAdmin: { type: Boolean, default: false },
   readingPositions: { type: Map, of: Number },
 });
 

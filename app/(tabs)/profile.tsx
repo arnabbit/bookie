@@ -108,6 +108,13 @@ export default function ProfileScreen() {
 
       {/* Menu Items */}
       <View style={styles.menuSection}>
+        {user?.isAdmin && (
+          <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/admin' as any)}>
+            <Ionicons name="shield-outline" size={22} color={colors.tertiary} />
+            <Text style={styles.menuRowText}>Admin Portal</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.outlineVariant} />
+          </TouchableOpacity>
+        )}
         <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/settings' as any)}>
           <Ionicons name="settings-outline" size={22} color={colors.tertiary} />
           <Text style={styles.menuRowText}>Account Settings</Text>

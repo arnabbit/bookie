@@ -1,0 +1,797 @@
+import React, { useEffect, useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  TextInput,
+  FlatList,
+  ScrollView,
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Modal,
+  KeyboardAvoidingView,
+} from 'react-native';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { API_URL, useAuth } from '@/lib/AuthContext';
+import { colors, fonts, radius, shadows, FORMAT_DISPLAY } from '@/lib/theme';
+import { generateFormatFromPdf, GeneratedPage } from '@/lib/geminiAdmin';
+
+type FormatKey = 'mini' | 'pro' | 'ultra';
+type Screen = 'list' | 'editor';
+
+interface BookListItem {
+  _id: string;
+  title: string;
+  author: string;
+  summary: string;
+  coverUrl: string;
+  availableFormats: FormatKey[];
+  pageCounts: Record<FormatKey, number>;
+}
+
+interface BookFull {
+  _id: string;
+  title: string;
+  author: string;
+  summary: string;
+  coverUrl: string;
+  formats: Record<FormatKey, { pageNumber: number; content: string; imageUrl?: string }[]>;
+}
+
+const FORMAT_KEYS: FormatKey[] = ['mini', 'pro', 'ultra'];
+
+export default function AdminScreen() {
+  const { token } = useAuth();
+  const router = useRouter();
+  const [screen, setScreen] = useState<Screen>('list');
+  const [books, setBooks] = useState<BookListItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingBook, setEditingBook] = useState<BookFull | null>(null);
+  const [activeFormat, setActiveFormat] = useState<FormatKey>('mini');
+  const [generating, setGenerating] = useState(false);
+  const [genStatus, setGenStatus] = useState('');
+  const [editingPageIdx, setEditingPageIdx] = useState<number | null>(null);
+  const [editPageContent, setEditPageContent] = useState('');
+  const [saving, setSaving] = useState(false);
+  // Metadata editing
+  const [metaTitle, setMetaTitle] = useState('');
+  const [metaAuthor, setMetaAuthor] = useState('');
+  const [metaSummary, setMetaSummary] = useState('');
+  const [metaCoverUrl, setMetaCoverUrl] = useState('');
+  // New book
+  const [showNewBook, setShowNewBook] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newAuthor, setNewAuthor] = useState('');
+  // Gemini key (fetched from server)
+  const [geminiKey, setGeminiKey] = useState('');
+  // Unsaved generated pages (preview before save)
+  const [previewPages, setPreviewPages] = useState<GeneratedPage[] | null>(null);
+
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+  // Fetch books list
+  const fetchBooks = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/admin/books`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setBooks(await res.json());
+    } catch {}
+  }, [token]);
+
+  // Fetch gemini key
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/gemini-key`, { headers: { Authorization: `Bearer ${token}` } });
+        if (res.ok) { const d = await res.json(); setGeminiKey(d.key); }
+      } catch {}
+    })();
+  }, [token]);
+
+  useEffect(() => {
+    (async () => { setLoading(true); await fetchBooks(); setLoading(false); })();
+  }, [fetchBooks]);
+
+  // Open book editor
+  const openBook = async (bookId: string) => {
+    try {
+      const res = await fetch(`${API_URL}/api/admin/books/${bookId}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const book = await res.json();
+        setEditingBook(book);
+        setMetaTitle(book.title);
+        setMetaAuthor(book.author);
+        setMetaSummary(book.summary || '');
+        setMetaCoverUrl(book.coverUrl || '');
+        setActiveFormat('mini');
+        setPreviewPages(null);
+        setScreen('editor');
+      }
+    } catch {}
+  };
+
+  // Create new book
+  const createBook = async () => {
+    if (!newTitle.trim()) return;
+    try {
+      const res = await fetch(`${API_URL}/api/admin/books`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ title: newTitle.trim(), author: newAuthor.trim() }),
+      });
+      if (res.ok) {
+        const book = await res.json();
+        setShowNewBook(false);
+        setNewTitle('');
+        setNewAuthor('');
+        await fetchBooks();
+        openBook(book._id);
+      }
+    } catch {}
+  };
+
+  // Save metadata
+  const saveMeta = async () => {
+    if (!editingBook) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/books/${editingBook._id}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ title: metaTitle, author: metaAuthor, summary: metaSummary, coverUrl: metaCoverUrl }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setEditingBook((prev) => prev ? { ...prev, ...updated } : prev);
+      }
+    } catch {} finally { setSaving(false); }
+  };
+
+  // Delete book
+  const deleteBook = async () => {
+    if (!editingBook) return;
+    const doDelete = async () => {
+      await fetch(`${API_URL}/api/admin/books/${editingBook._id}`, { method: 'DELETE', headers });
+      setScreen('list');
+      setEditingBook(null);
+      fetchBooks();
+    };
+    if (Platform.OS === 'web') {
+      if (window.confirm(`Delete "${editingBook.title}"?`)) doDelete();
+    } else {
+      Alert.alert('Delete Book', `Delete "${editingBook.title}"?`, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: doDelete },
+      ]);
+    }
+  };
+
+  // Generate with Gemini
+  const generateWithGemini = async () => {
+    if (!geminiKey) { Alert.alert('Error', 'Server GEMINI_API_KEY not configured'); return; }
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
+      if (result.canceled) return;
+      const file = result.assets[0];
+      if (!file) return;
+      if (file.size && file.size > 30 * 1024 * 1024) {
+        Alert.alert('Error', 'PDF too large (max 30MB)');
+        return;
+      }
+
+      setGenerating(true);
+      setGenStatus('Starting...');
+
+      const gen = await generateFormatFromPdf(file.uri, geminiKey, activeFormat, setGenStatus);
+
+      // If book has no summary yet, use the generated one
+      if (!metaSummary && gen.summary) {
+        setMetaSummary(gen.summary);
+      }
+      // If title/author empty, use generated
+      if (!metaTitle && gen.title) setMetaTitle(gen.title);
+      if (!metaAuthor && gen.author) setMetaAuthor(gen.author);
+
+      setPreviewPages(gen.pages);
+      setGenStatus(`Generated ${gen.pages.length} pages. Review and save.`);
+    } catch (err: any) {
+      Alert.alert('Generation Failed', err.message || 'Unknown error');
+      setGenStatus('');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // Save generated/edited pages to server
+  const savePages = async (pages: { pageNumber: number; content: string }[]) => {
+    if (!editingBook) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ pages }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setEditingBook((prev) => {
+          if (!prev) return prev;
+          return { ...prev, formats: { ...prev.formats, [activeFormat]: data.pages } };
+        });
+        setPreviewPages(null);
+        setGenStatus('');
+        fetchBooks();
+      }
+    } catch {} finally { setSaving(false); }
+  };
+
+  // Add blank page
+  const addPage = () => {
+    if (!editingBook) return;
+    const pages = editingBook.formats[activeFormat] || [];
+    const newPage = { pageNumber: pages.length + 1, content: '', imageUrl: '' };
+    setEditingBook({
+      ...editingBook,
+      formats: { ...editingBook.formats, [activeFormat]: [...pages, newPage] },
+    });
+    // Open editor for the new page
+    setEditingPageIdx(pages.length);
+    setEditPageContent('');
+  };
+
+  // Save single page edit
+  const savePageEdit = async () => {
+    if (!editingBook || editingPageIdx === null) return;
+    const pages = [...(editingBook.formats[activeFormat] || [])];
+    pages[editingPageIdx] = { ...pages[editingPageIdx], content: editPageContent };
+    // Update local state
+    setEditingBook({
+      ...editingBook,
+      formats: { ...editingBook.formats, [activeFormat]: pages },
+    });
+    // Save to server
+    setSaving(true);
+    try {
+      await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ pages }),
+      });
+    } catch {} finally { setSaving(false); }
+    setEditingPageIdx(null);
+  };
+
+  // Delete page
+  const deletePage = async (idx: number) => {
+    if (!editingBook) return;
+    const pages = [...(editingBook.formats[activeFormat] || [])];
+    pages.splice(idx, 1);
+    pages.forEach((p, i) => { p.pageNumber = i + 1; });
+    setEditingBook({
+      ...editingBook,
+      formats: { ...editingBook.formats, [activeFormat]: pages },
+    });
+    setSaving(true);
+    try {
+      await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ pages }),
+      });
+    } catch {} finally { setSaving(false); }
+  };
+
+  // Clear format
+  const clearFormat = async () => {
+    if (!editingBook) return;
+    const doClear = async () => {
+      await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
+        method: 'DELETE',
+        headers,
+      });
+      setEditingBook({
+        ...editingBook,
+        formats: { ...editingBook.formats, [activeFormat]: [] },
+      });
+      fetchBooks();
+    };
+    if (Platform.OS === 'web') {
+      if (window.confirm(`Clear all ${FORMAT_DISPLAY[activeFormat]} pages?`)) doClear();
+    } else {
+      Alert.alert('Clear Format', `Remove all ${FORMAT_DISPLAY[activeFormat]} pages?`, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Clear', style: 'destructive', onPress: doClear },
+      ]);
+    }
+  };
+
+  const currentPages = previewPages || editingBook?.formats[activeFormat] || [];
+
+  // ─── BOOK LIST ─────────────────────────────────────────
+  if (screen === 'list') {
+    return (
+      <SafeAreaView style={s.container} edges={['top']}>
+        <View style={s.topBar}>
+          <TouchableOpacity onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
+          </TouchableOpacity>
+          <Text style={s.topBarTitle}>Admin Portal</Text>
+          <View style={{ width: 24 }} />
+        </View>
+
+        {loading ? (
+          <ActivityIndicator style={{ marginTop: 40 }} color={colors.tertiary} />
+        ) : (
+          <FlatList
+            data={books}
+            keyExtractor={(b) => b._id}
+            contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+            ListEmptyComponent={<Text style={s.empty}>No books yet</Text>}
+            renderItem={({ item }) => (
+              <TouchableOpacity style={s.bookRow} onPress={() => openBook(item._id)} activeOpacity={0.7}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.bookRowTitle}>{item.title}</Text>
+                  <Text style={s.bookRowAuthor}>{item.author}</Text>
+                </View>
+                <View style={s.formatBadges}>
+                  {FORMAT_KEYS.map((f) => (
+                    <View key={f} style={[s.badge, item.pageCounts[f] > 0 ? s.badgeActive : s.badgeEmpty]}>
+                      <Text style={[s.badgeText, item.pageCounts[f] > 0 && s.badgeTextActive]}>
+                        {FORMAT_DISPLAY[f]?.[0]}{item.pageCounts[f] > 0 ? ` ${item.pageCounts[f]}` : ''}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </TouchableOpacity>
+            )}
+          />
+        )}
+
+        {/* FAB */}
+        <TouchableOpacity style={s.fab} onPress={() => setShowNewBook(true)}>
+          <Ionicons name="add" size={28} color={colors.onPrimary} />
+        </TouchableOpacity>
+
+        {/* New Book Modal */}
+        <Modal visible={showNewBook} transparent animationType="fade">
+          <View style={s.modalOverlay}>
+            <View style={s.modalCard}>
+              <Text style={s.modalCardTitle}>New Book</Text>
+              <TextInput style={s.input} placeholder="Title" placeholderTextColor={colors.outline} value={newTitle} onChangeText={setNewTitle} />
+              <TextInput style={s.input} placeholder="Author" placeholderTextColor={colors.outline} value={newAuthor} onChangeText={setNewAuthor} />
+              <View style={s.modalBtns}>
+                <TouchableOpacity style={s.modalCancel} onPress={() => setShowNewBook(false)}>
+                  <Text style={s.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.modalConfirm} onPress={createBook}>
+                  <Text style={s.modalConfirmText}>Create</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </SafeAreaView>
+    );
+  }
+
+  // ─── BOOK EDITOR ───────────────────────────────────────
+  return (
+    <SafeAreaView style={s.container} edges={['top']}>
+      <View style={s.topBar}>
+        <TouchableOpacity onPress={() => { setScreen('list'); setEditingBook(null); setPreviewPages(null); fetchBooks(); }}>
+          <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
+        </TouchableOpacity>
+        <Text style={s.topBarTitle} numberOfLines={1}>{metaTitle || 'Edit Book'}</Text>
+        {saving ? <ActivityIndicator size="small" color={colors.tertiary} /> : <View style={{ width: 24 }} />}
+      </View>
+
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
+          {/* Metadata */}
+          <View style={s.section}>
+            <Text style={s.sectionLabel}>Book Details</Text>
+            <TextInput style={s.input} placeholder="Title" placeholderTextColor={colors.outline} value={metaTitle} onChangeText={setMetaTitle} />
+            <TextInput style={s.input} placeholder="Author" placeholderTextColor={colors.outline} value={metaAuthor} onChangeText={setMetaAuthor} />
+            <TextInput style={[s.input, { minHeight: 80, textAlignVertical: 'top' }]} placeholder="Summary" placeholderTextColor={colors.outline} value={metaSummary} onChangeText={setMetaSummary} multiline />
+            <TextInput style={s.input} placeholder="Cover URL" placeholderTextColor={colors.outline} value={metaCoverUrl} onChangeText={setMetaCoverUrl} />
+            <TouchableOpacity style={s.saveMetaBtn} onPress={saveMeta}>
+              <Text style={s.saveMetaBtnText}>Save Details</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Format Tabs */}
+          <View style={s.formatTabs}>
+            {FORMAT_KEYS.map((f) => {
+              const count = editingBook?.formats[f]?.length || 0;
+              const isActive = activeFormat === f;
+              return (
+                <TouchableOpacity
+                  key={f}
+                  style={[s.formatTab, isActive && s.formatTabActive]}
+                  onPress={() => { setActiveFormat(f); setPreviewPages(null); }}
+                >
+                  <Text style={[s.formatTabText, isActive && s.formatTabTextActive]}>
+                    {FORMAT_DISPLAY[f]}
+                  </Text>
+                  <Text style={[s.formatTabCount, isActive && s.formatTabCountActive]}>
+                    {count} pg
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Actions */}
+          <View style={s.section}>
+            <View style={s.actionRow}>
+              <TouchableOpacity
+                style={[s.actionBtn, generating && { opacity: 0.5 }]}
+                onPress={generateWithGemini}
+                disabled={generating}
+              >
+                <Ionicons name="sparkles" size={18} color={colors.tertiary} />
+                <Text style={s.actionBtnText}>Generate with Gemini</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.actionBtn} onPress={addPage}>
+                <Ionicons name="add-circle-outline" size={18} color={colors.tertiary} />
+                <Text style={s.actionBtnText}>Add Page</Text>
+              </TouchableOpacity>
+            </View>
+
+            {generating && (
+              <View style={s.genStatus}>
+                <ActivityIndicator size="small" color={colors.tertiary} />
+                <Text style={s.genStatusText}>{genStatus}</Text>
+              </View>
+            )}
+
+            {previewPages && !generating && (
+              <View style={s.previewBanner}>
+                <Text style={s.previewBannerText}>{genStatus}</Text>
+                <View style={s.actionRow}>
+                  <TouchableOpacity style={s.savePreviewBtn} onPress={() => savePages(previewPages)}>
+                    <Text style={s.savePreviewBtnText}>Save to Book</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.discardBtn} onPress={() => { setPreviewPages(null); setGenStatus(''); }}>
+                    <Text style={s.discardBtnText}>Discard</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+
+          {/* Pages List */}
+          <View style={s.section}>
+            <View style={s.pagesHeader}>
+              <Text style={s.sectionLabel}>Pages ({currentPages.length})</Text>
+              {!previewPages && currentPages.length > 0 && (
+                <TouchableOpacity onPress={clearFormat}>
+                  <Text style={s.clearText}>Clear All</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {currentPages.length === 0 ? (
+              <Text style={s.empty}>No pages. Generate with Gemini or add manually.</Text>
+            ) : (
+              currentPages.map((page: any, idx: number) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={s.pageCard}
+                  onPress={() => { setEditingPageIdx(idx); setEditPageContent(page.content || ''); }}
+                  activeOpacity={0.7}
+                >
+                  <View style={s.pageCardHeader}>
+                    <Text style={s.pageNum}>Page {page.pageNumber ?? idx + 1}</Text>
+                    {!previewPages && (
+                      <TouchableOpacity onPress={() => deletePage(idx)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="trash-outline" size={16} color={colors.error} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <Text style={s.pagePreview} numberOfLines={3}>{page.content || '(empty)'}</Text>
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+
+          {/* Delete Book */}
+          <View style={s.section}>
+            <TouchableOpacity style={s.deleteBookBtn} onPress={deleteBook}>
+              <Ionicons name="trash-outline" size={18} color={colors.error} />
+              <Text style={s.deleteBookBtnText}>Delete Book</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* Page Edit Modal */}
+      <Modal visible={editingPageIdx !== null} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <View style={s.pageEditModal}>
+            <View style={s.pageEditHeader}>
+              <Text style={s.pageEditTitle}>
+                Page {editingPageIdx !== null ? (editingPageIdx + 1) : ''}
+              </Text>
+              <TouchableOpacity onPress={() => setEditingPageIdx(null)}>
+                <Ionicons name="close" size={24} color={colors.onSurface} />
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={s.pageEditInput}
+              value={editPageContent}
+              onChangeText={setEditPageContent}
+              multiline
+              placeholder="Page content..."
+              placeholderTextColor={colors.outline}
+              textAlignVertical="top"
+            />
+            <TouchableOpacity style={s.pageEditSave} onPress={savePageEdit}>
+              <Text style={s.pageEditSaveText}>Save Page</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.surface },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: colors.surface,
+  },
+  topBarTitle: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 18,
+    color: colors.onSurface,
+    flex: 1,
+    textAlign: 'center',
+    marginHorizontal: 8,
+  },
+
+  // Book list
+  bookRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 8,
+  },
+  bookRowTitle: { fontFamily: fonts.bodySemiBold, fontSize: 15, color: colors.onSurface },
+  bookRowAuthor: { fontFamily: fonts.body, fontSize: 12, color: colors.onSurfaceVariant, marginTop: 2 },
+  formatBadges: { flexDirection: 'row', gap: 4 },
+  badge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  badgeActive: { backgroundColor: colors.tertiary + '20' },
+  badgeEmpty: { backgroundColor: colors.surfaceContainerHigh },
+  badgeText: { fontFamily: fonts.bodyBold, fontSize: 9, fontWeight: '700', color: colors.onSurfaceVariant },
+  badgeTextActive: { color: colors.tertiary },
+
+  // FAB
+  fab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: colors.primaryContainer,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...shadows.lg,
+  },
+
+  // Section
+  section: { paddingHorizontal: 16, marginTop: 16 },
+  sectionLabel: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+    color: colors.onSurfaceVariant,
+    marginBottom: 10,
+  },
+
+  // Inputs
+  input: {
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontFamily: fonts.body,
+    fontSize: 14,
+    color: colors.onSurface,
+    marginBottom: 8,
+  },
+  saveMetaBtn: {
+    backgroundColor: colors.primaryContainer,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  saveMetaBtnText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.onPrimary },
+
+  // Format tabs
+  formatTabs: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginTop: 20,
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: 12,
+    padding: 3,
+  },
+  formatTab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  formatTabActive: { backgroundColor: colors.surfaceContainerLowest, ...shadows.sm },
+  formatTabText: { fontFamily: fonts.bodySemiBold, fontSize: 13, color: colors.onSurfaceVariant },
+  formatTabTextActive: { color: colors.onSurface },
+  formatTabCount: { fontFamily: fonts.body, fontSize: 10, color: colors.onSurfaceVariant + '80', marginTop: 2 },
+  formatTabCountActive: { color: colors.tertiary },
+
+  // Actions
+  actionRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+  actionBtnText: { fontFamily: fonts.bodySemiBold, fontSize: 13, color: colors.onSurface },
+
+  genStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: 10,
+  },
+  genStatusText: { fontFamily: fonts.body, fontSize: 13, color: colors.onSurfaceVariant, flex: 1 },
+
+  previewBanner: {
+    marginTop: 12,
+    padding: 14,
+    backgroundColor: colors.tertiary + '12',
+    borderRadius: 12,
+  },
+  previewBannerText: { fontFamily: fonts.bodySemiBold, fontSize: 13, color: colors.tertiary, marginBottom: 10 },
+  savePreviewBtn: {
+    flex: 1,
+    backgroundColor: colors.tertiary,
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  savePreviewBtnText: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.onTertiary },
+  discardBtn: {
+    flex: 1,
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  discardBtnText: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.onSurfaceVariant },
+
+  // Pages
+  pagesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  clearText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.error },
+  pageCard: {
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 6,
+  },
+  pageCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  pageNum: { fontFamily: fonts.bodyBold, fontSize: 11, fontWeight: '700', color: colors.tertiary },
+  pagePreview: { fontFamily: fonts.body, fontSize: 13, color: colors.onSurface, lineHeight: 20 },
+
+  // Delete
+  deleteBookBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: colors.error + '30',
+    marginTop: 16,
+  },
+  deleteBookBtnText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.error },
+
+  // Modals
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCard: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: 20,
+    padding: 24,
+    width: '85%',
+    maxWidth: 400,
+  },
+  modalCardTitle: { fontFamily: fonts.headlineBold, fontSize: 20, color: colors.onSurface, marginBottom: 16 },
+  modalBtns: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  modalCancel: { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: colors.surfaceContainerHigh, alignItems: 'center' },
+  modalCancelText: { fontFamily: fonts.bodySemiBold, fontSize: 14, color: colors.onSurfaceVariant },
+  modalConfirm: { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: colors.primaryContainer, alignItems: 'center' },
+  modalConfirmText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.onPrimary },
+
+  // Page edit modal
+  pageEditModal: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    maxHeight: '80%',
+    padding: 24,
+  },
+  pageEditHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  pageEditTitle: { fontFamily: fonts.headlineBold, fontSize: 18, color: colors.onSurface },
+  pageEditInput: {
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: 12,
+    padding: 16,
+    fontFamily: fonts.body,
+    fontSize: 14,
+    color: colors.onSurface,
+    minHeight: 200,
+    lineHeight: 22,
+  },
+  pageEditSave: {
+    backgroundColor: colors.primaryContainer,
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  pageEditSaveText: { fontFamily: fonts.bodyBold, fontSize: 15, color: colors.onPrimary },
+
+  empty: { fontFamily: fonts.body, fontSize: 14, color: colors.onSurfaceVariant, textAlign: 'center', paddingVertical: 32 },
+});
