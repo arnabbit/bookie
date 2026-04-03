@@ -5,10 +5,12 @@ const OPENROUTER_KEY_STORAGE = 'openrouter_api_key';
 const OPENROUTER_MODEL_STORAGE = 'openrouter_model';
 
 export const OPENROUTER_MODELS = [
-  { id: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B (Free)' },
+  { id: 'openai/gpt-oss-120b:free', label: 'GPT OSS 120B free' },
   { id: 'stepfun/step-3.5-flash:free', label: 'Step 3.5 Flash (Free)' },
   { id: 'arcee-ai/trinity-large-preview:free', label: 'Arcee Trinity Large (Free)' },
-  { id: 'x-ai/grok-4.1-fast', label: 'Grok 4.1 Fast' },
+  { id: 'qwen/qwen3.6-plus:free', label: 'Qwen 3.6 plus free' },
+  { id: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 paid 010-040' },
+  { id: 'mistralai/mistral-small-creative', label: 'mistral creative paid 010-030' }
 ];
 
 // Gemini
