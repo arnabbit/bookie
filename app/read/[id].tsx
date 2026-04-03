@@ -75,9 +75,9 @@ export default function BookReaderScreen() {
     }
   }, [book, id, currentPage, fetchComments]);
 
-  // Save reading position on page change
+  // Save reading position on page change (skip while loading to avoid overwriting saved pos with 0)
   useEffect(() => {
-    if (!id) return;
+    if (!id || loading) return;
     fetch(`${API_URL}/api/books/${id}/position`, {
       method: 'POST',
       headers: {
@@ -86,7 +86,7 @@ export default function BookReaderScreen() {
       },
       body: JSON.stringify({ page: currentPage, format: format || 'mini' }),
     }).catch(() => {});
-  }, [currentPage]);
+  }, [currentPage, loading]);
 
   // Scroll to saved page once listHeight is known
   useEffect(() => {
