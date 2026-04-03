@@ -83,14 +83,6 @@ export default function RootLayout() {
     }
   }, [loaded]);
 
-  const { isLoading } = useAuth();
-
-  const onLayoutRootView = useCallback(async () => {
-    if (loaded && fontReady && !isLoading && Platform.OS !== 'web') {
-      await SplashScreen.hideAsync();
-    }
-  }, [loaded, fontReady, isLoading]);
-
   if (!loaded || !fontReady) {
     return null;
   }
@@ -98,20 +90,34 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={AtelierTheme}>
       <AuthProvider>
-        <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
-          <AuthGuard>
-            <Stack>
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="auth" options={{ headerShown: false }} />
-              <Stack.Screen name="chat" options={{ headerShown: false }} />
-              <Stack.Screen name="conversations" options={{ headerShown: false }} />
-              <Stack.Screen name="book-picker" options={{ headerShown: true, title: 'Share Page', presentation: 'modal' }} />
-              <Stack.Screen name="admin" options={{ headerShown: false }} />
-            </Stack>
-          </AuthGuard>
-        </View>
+        <RootLayoutNav />
       </AuthProvider>
       <StatusBar style="auto" />
     </ThemeProvider>
+  );
+}
+
+function RootLayoutNav() {
+  const { isLoading } = useAuth();
+
+  const onLayoutRootView = useCallback(async () => {
+    if (!isLoading && Platform.OS !== 'web') {
+      await SplashScreen.hideAsync();
+    }
+  }, [isLoading]);
+
+  return (
+    <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
+      <AuthGuard>
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="auth" options={{ headerShown: false }} />
+          <Stack.Screen name="chat" options={{ headerShown: false }} />
+          <Stack.Screen name="conversations" options={{ headerShown: false }} />
+          <Stack.Screen name="book-picker" options={{ headerShown: true, title: 'Share Page', presentation: 'modal' }} />
+          <Stack.Screen name="admin" options={{ headerShown: false }} />
+        </Stack>
+      </AuthGuard>
+    </View>
   );
 }

@@ -22,7 +22,7 @@ export default function Root({ children }: PropsWithChildren) {
 const fontStyles = `
 @font-face {
   font-family: 'ionicons';
-  src: url('/fonts/Ionicons.ttf') format('truetype');
+  src: url('/assets/fonts/Ionicons.ttf') format('truetype');
   font-display: block;
 }
 `;
