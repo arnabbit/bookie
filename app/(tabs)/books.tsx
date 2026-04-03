@@ -12,7 +12,7 @@ import {
   Dimensions,
   TextInput,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { API_URL, useAuth } from '@/lib/AuthContext';
@@ -56,6 +56,7 @@ export default function BooksScreen() {
   const [search, setSearch] = useState('');
   const { token } = useAuth();
   const router = useRouter();
+  const params = useLocalSearchParams<{ openBook?: string; format?: string }>();
 
   const fetchCatalogue = useCallback(async () => {
     try {
@@ -86,6 +87,20 @@ export default function BooksScreen() {
       setLoading(false);
     })();
   }, [fetchCatalogue, fetchMyBooks]);
+
+  // Deep-link: open catalogue modal for a specific book+format
+  useEffect(() => {
+    if (params.openBook && catalogue.length > 0) {
+      const book = catalogue.find((b) => b._id === params.openBook);
+      if (book) {
+        setTab('catalogue');
+        setSelectedBook(book);
+        if (params.format && ['mini', 'pro', 'ultra'].includes(params.format)) {
+          setSelectedFormat(params.format as BookFormat);
+        }
+      }
+    }
+  }, [params.openBook, params.format, catalogue]);
 
   const addToMyBooks = async (bookId: string, format: BookFormat) => {
     setAdding(true);

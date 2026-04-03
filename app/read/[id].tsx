@@ -42,7 +42,7 @@ export default function BookReaderScreen() {
           fetch(`${API_URL}/api/books/${id}/read?format=${format || 'mini'}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`${API_URL}/api/books/${id}/position`, {
+          fetch(`${API_URL}/api/books/${id}/position?format=${format || 'mini'}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);
@@ -84,7 +84,7 @@ export default function BookReaderScreen() {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ page: currentPage }),
+      body: JSON.stringify({ page: currentPage, format: format || 'mini' }),
     }).catch(() => {});
   }, [currentPage]);
 
@@ -145,6 +145,7 @@ export default function BookReaderScreen() {
               bookTitle: book.title,
               pageNumber: currentPage,
               content: page?.content || '',
+              format: format || 'mini',
             },
           });
           setTimeout(() => { socket.disconnect(); }, 500);

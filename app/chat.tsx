@@ -106,7 +106,10 @@ export default function ChatScreen() {
         <View style={[styles.msgWrap, isMine ? styles.msgWrapRight : styles.msgWrapLeft]}>
           <TouchableOpacity
             style={styles.shareCard}
-            onPress={() => (router as any).push({ pathname: '/read/[id]', params: { id: item.sharedBookPage!.book } })}
+            onPress={() => (router as any).push({
+              pathname: '/(tabs)/books',
+              params: { openBook: item.sharedBookPage!.book, format: item.sharedBookPage!.format || 'mini' },
+            })}
             activeOpacity={0.8}
           >
             <View style={styles.shareCardInner}>
@@ -303,6 +306,7 @@ const styles = StyleSheet.create({
 
   // Book share card
   shareCard: {
+    flex: 1,
     backgroundColor: colors.surfaceContainerLowest,
     borderRadius: 16,
     borderLeftWidth: 4,
@@ -310,8 +314,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...shadows.sm,
   },
-  shareCardInner: { flexDirection: 'row' },
-  shareCardContent: { flex: 1, padding: 14 },
+  shareCardInner: { flexDirection: 'column' },
+  shareCardContent: { padding: 14 },
   shareLabel: {
     fontFamily: fonts.bodyBold,
     fontSize: 9,

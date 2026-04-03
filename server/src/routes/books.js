@@ -55,7 +55,8 @@ router.get('/my-books', authMiddleware, async (req, res) => {
 
     res.json(userBooks.map((ub) => {
       const pageCount = ub.bookId.formats?.[ub.format]?.length || 0;
-      const readingPosition = positions[ub.bookId._id.toString()] || 0;
+      const posKey = `${ub.bookId._id.toString()}_${ub.format}`;
+      const readingPosition = positions[posKey] ?? positions[ub.bookId._id.toString()] ?? 0;
       return {
         _id: ub.bookId._id,
         title: ub.bookId.title,
@@ -153,16 +154,17 @@ router.get('/:id/read', authMiddleware, async (req, res) => {
   }
 });
 
-// Save reading position
+// Save reading position (keyed by bookId_format)
 router.post('/:id/position', authMiddleware, async (req, res) => {
   try {
-    const { page } = req.body;
+    const { page, format } = req.body;
     if (typeof page !== 'number' || page < 0) {
       return res.status(400).json({ error: 'Valid page number required' });
     }
+    const key = format ? `${req.params.id}_${format}` : req.params.id;
     const User = require('../models/User');
     await User.findByIdAndUpdate(req.user.id, {
-      [`readingPositions.${req.params.id}`]: page,
+      [`readingPositions.${key}`]: page,
     });
     res.json({ page });
   } catch (err) {
@@ -170,12 +172,14 @@ router.post('/:id/position', authMiddleware, async (req, res) => {
   }
 });
 
-// Get reading position
+// Get reading position (keyed by bookId_format)
 router.get('/:id/position', authMiddleware, async (req, res) => {
   try {
+    const format = req.query.format;
+    const key = format ? `${req.params.id}_${format}` : req.params.id;
     const User = require('../models/User');
     const user = await User.findById(req.user.id);
-    const page = user?.readingPositions?.get(req.params.id);
+    const page = user?.readingPositions?.get(key);
     res.json({ page: page ?? 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
