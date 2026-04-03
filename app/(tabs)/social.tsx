@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,11 +7,12 @@ import {
   FlatList,
   TextInput,
   Modal,
-  ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_URL, useAuth } from '@/lib/AuthContext';
+import { colors, fonts, radius, shadows, ghostBorder } from '@/lib/theme';
 
 interface Friend {
   _id: string;
@@ -19,12 +20,10 @@ interface Friend {
   avatar?: string;
   bio?: string;
 }
-
 interface FriendRequest {
   _id: string;
   from?: { _id: string; username: string; avatar?: string };
 }
-
 interface UserResult {
   _id: string;
   username: string;
@@ -35,7 +34,6 @@ interface UserResult {
 export default function SocialScreen() {
   const { token } = useAuth();
   const router = useRouter();
-
   const [friends, setFriends] = useState<Friend[]>([]);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -46,15 +44,9 @@ export default function SocialScreen() {
   const fetchData = useCallback(async () => {
     try {
       const [friendsRes, requestsRes, outgoingRes] = await Promise.all([
-        fetch(`${API_URL}/api/friends`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        fetch(`${API_URL}/api/friends/requests/incoming`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        fetch(`${API_URL}/api/friends/requests/outgoing`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
+        fetch(`${API_URL}/api/friends`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_URL}/api/friends/requests/incoming`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_URL}/api/friends/requests/outgoing`, { headers: { Authorization: `Bearer ${token}` } }),
       ]);
       if (friendsRes.ok) setFriends(await friendsRes.json());
       if (requestsRes.ok) setRequests(await requestsRes.json());
@@ -69,10 +61,7 @@ export default function SocialScreen() {
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
-    if (query.length < 1) {
-      setSearchResults([]);
-      return;
-    }
+    if (query.length < 1) { setSearchResults([]); return; }
     try {
       const res = await fetch(`${API_URL}/api/users/search?q=${query}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -85,10 +74,7 @@ export default function SocialScreen() {
     try {
       await fetch(`${API_URL}/api/friends/requests`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ toUserId: userId }),
       });
       setSentRequests((prev) => [...prev, userId]);
@@ -99,22 +85,16 @@ export default function SocialScreen() {
     try {
       await fetch(`${API_URL}/api/friends/requests/${requestId}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ action }),
       });
       setRequests((prev) => prev.filter((r) => r._id !== requestId));
-      // Refresh friends
-      await fetch(`${API_URL}/api/friends`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then((r) => (r.ok ? r.json().then(setFriends) : null));
+      const r = await fetch(`${API_URL}/api/friends`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) setFriends(await r.json());
     } catch { /* ignore */ }
   };
 
   const openChat = async (friendId: string, username: string) => {
-    // Create or get conversation
     try {
       const res = await fetch(`${API_URL}/api/chat/conversation/with/${friendId}`, {
         method: 'POST',
@@ -122,101 +102,104 @@ export default function SocialScreen() {
       });
       if (res.ok) {
         const conv = await res.json();
-        (router as any).push({
-          pathname: '/chat',
-          params: { id: conv._id, username },
-        });
+        (router as any).push({ pathname: '/chat', params: { id: conv._id, username } });
       }
     } catch { /* ignore */ }
   };
 
+  const initials = (name?: string) => (name?.substring(0, 2) || '?').toUpperCase();
+
   return (
     <View style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Social</Text>
-        <View style={styles.headerActions}>
-          {requests.length > 0 && (
-            <View style={styles.requestBadge}>
-              <Ionicons name="person-add" size={18} color="#fff" />
-              <View style={styles.requestBadgeText}>
-                <Text style={styles.requestBadgeCount}>{requests.length}</Text>
-              </View>
-            </View>
-          )}
-          <TouchableOpacity onPress={() => setShowSearch(true)} style={styles.searchButton}>
-            <Ionicons name="search" size={24} color="#333" />
-          </TouchableOpacity>
-        </View>
       </View>
 
-      {/* Incoming Requests */}
-      {requests.length > 0 && (
-        <View style={styles.requestsSection}>
-          <Text style={styles.sectionTitle}>Friend Requests</Text>
-          <FlatList
-            data={requests}
-            horizontal
-            keyExtractor={(item) => item._id}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.requestsScroll}
-            renderItem={({ item }) => (
-              <View style={styles.requestCard}>
-                <View style={styles.requestAvatar}>
-                  <Text style={styles.requestAvatarText}>
-                    {(item.from?.username?.substring(0, 2) || '?').toUpperCase()}
-                  </Text>
-                </View>
-                <Text style={styles.requestName} numberOfLines={1}>{item.from?.username}</Text>
-                <View style={styles.requestBtns}>
-                  <TouchableOpacity
-                    style={[styles.requestBtn, styles.acceptBtn]}
-                    onPress={() => respondToRequest(item._id, 'accept')}
-                  >
-                    <Ionicons name="checkmark" size={16} color="#fff" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.requestBtn, styles.rejectBtn]}
-                    onPress={() => respondToRequest(item._id, 'reject')}
-                  >
-                    <Ionicons name="close" size={16} color="#fff" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-          />
-        </View>
-      )}
+      {/* Search Bar */}
+      <TouchableOpacity style={styles.searchBar} onPress={() => setShowSearch(true)} activeOpacity={0.8}>
+        <Ionicons name="search" size={20} color={colors.onSurfaceVariant} />
+        <Text style={styles.searchPlaceholder}>Find new friends</Text>
+      </TouchableOpacity>
 
-      {/* Friends List */}
-      <Text style={styles.sectionTitle}>Friends</Text>
-      <FlatList
-        data={friends}
-        keyExtractor={(item) => item._id}
-        contentContainerStyle={styles.friendsList}
-        ListEmptyComponent={
-          <View style={styles.center}>
-            <Ionicons name="people-outline" size={48} color="#ccc" />
-            <Text style={styles.emptyText}>No friends yet. Search and add people!</Text>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 100 }}>
+        {/* Friend Requests */}
+        {requests.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionTitle}>Friend Requests</Text>
+              <View style={styles.countBadge}>
+                <Text style={styles.countBadgeText}>{requests.length} New</Text>
+              </View>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.requestsScroll}>
+              {requests.map((item) => (
+                <View key={item._id} style={styles.requestCard}>
+                  <View style={styles.requestAvatarWrap}>
+                    <View style={styles.requestAvatar}>
+                      <Text style={styles.requestAvatarText}>{initials(item.from?.username)}</Text>
+                    </View>
+                    <View style={styles.requestAvatarBadge}>
+                      <Ionicons name="book" size={10} color={colors.onPrimary} />
+                    </View>
+                  </View>
+                  <Text style={styles.requestName} numberOfLines={1}>{item.from?.username}</Text>
+                  <View style={styles.requestBtns}>
+                    <TouchableOpacity
+                      style={styles.acceptBtn}
+                      onPress={() => respondToRequest(item._id, 'accept')}
+                    >
+                      <Text style={styles.acceptBtnText}>Accept</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.declineBtn}
+                      onPress={() => respondToRequest(item._id, 'reject')}
+                    >
+                      <Text style={styles.declineBtnText}>Decline</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
           </View>
-        }
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.friendItem}
-            onPress={() => openChat(item._id, item.username)}
-          >
-            <View style={styles.friendAvatar}>
-              <Text style={styles.friendAvatarText}>
-                {(item.username?.substring(0, 2) || '?').toUpperCase()}
-              </Text>
-            </View>
-            <View style={styles.friendInfo}>
-              <Text style={styles.friendName}>{item.username}</Text>
-              {item.bio ? <Text style={styles.friendBio} numberOfLines={1}>{item.bio}</Text> : null}
-            </View>
-            <Ionicons name="chatbubble-outline" size={20} color="#999" />
-          </TouchableOpacity>
         )}
-      />
+
+        {/* Friends List */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>My Friends</Text>
+          {friends.length === 0 ? (
+            <View style={styles.emptyWrap}>
+              <Ionicons name="people-outline" size={48} color={colors.surfaceContainerHighest} />
+              <Text style={styles.emptyText}>No friends yet. Search and add people!</Text>
+            </View>
+          ) : (
+            friends.map((item) => (
+              <TouchableOpacity
+                key={item._id}
+                style={styles.friendRow}
+                onPress={() => openChat(item._id, item.username)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.friendAvatar}>
+                  <Text style={styles.friendAvatarText}>{initials(item.username)}</Text>
+                </View>
+                <View style={styles.friendInfo}>
+                  <Text style={styles.friendName}>{item.username}</Text>
+                  {item.bio ? (
+                    <Text style={styles.friendBio} numberOfLines={1}>{item.bio}</Text>
+                  ) : null}
+                </View>
+                <TouchableOpacity
+                  style={styles.chatBtn}
+                  onPress={() => openChat(item._id, item.username)}
+                >
+                  <Ionicons name="chatbubble-outline" size={20} color={colors.onSurfaceVariant} />
+                </TouchableOpacity>
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+      </ScrollView>
 
       {/* Search Modal */}
       <Modal visible={showSearch} animationType="slide" transparent>
@@ -225,46 +208,45 @@ export default function SocialScreen() {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Friends</Text>
               <TouchableOpacity onPress={() => { setShowSearch(false); setSearchQuery(''); setSearchResults([]); }}>
-                <Ionicons name="close" size={24} color="#333" />
+                <Ionicons name="close" size={24} color={colors.onSurface} />
               </TouchableOpacity>
             </View>
-            <View style={styles.searchBar}>
+            <View style={styles.modalSearchWrap}>
+              <Ionicons name="search" size={20} color={colors.onSurfaceVariant} />
               <TextInput
-                style={styles.searchInput}
+                style={styles.modalSearchInput}
                 placeholder="Search by username..."
+                placeholderTextColor={colors.onSurfaceVariant + '80'}
                 value={searchQuery}
                 onChangeText={handleSearch}
                 autoCapitalize="none"
                 autoFocus
               />
             </View>
-
             <FlatList
               data={searchResults}
               keyExtractor={(item) => item._id}
               ListEmptyComponent={
-                searchQuery.length >= 1 ? (
-                  <Text style={styles.emptyList}>No users found</Text>
-                ) : (
-                  <Text style={styles.emptyList}>Type a username to search</Text>
-                )
+                <Text style={styles.emptyList}>
+                  {searchQuery.length >= 1 ? 'No users found' : 'Type a username to search'}
+                </Text>
               }
               renderItem={({ item }) => {
                 const isSent = sentRequests.includes(item._id);
                 return (
                   <View style={styles.searchResultItem}>
-                    <View style={styles.friendAvatarSmall}>
-                      <Text style={styles.friendAvatarSmallText}>
-                        {(item.username?.substring(0, 2) || '?').toUpperCase()}
-                      </Text>
+                    <View style={styles.searchResultAvatar}>
+                      <Text style={styles.searchResultAvatarText}>{initials(item.username)}</Text>
                     </View>
                     <Text style={styles.searchResultName}>{item.username}</Text>
                     <TouchableOpacity
-                      style={[styles.addBtn, isSent && styles.addBtnSent]}
+                      style={[styles.addFriendBtn, isSent && styles.addFriendBtnSent]}
                       disabled={isSent}
                       onPress={() => sendRequest(item._id)}
                     >
-                      <Text style={styles.addBtnText}>{isSent ? 'Sent' : 'Add'}</Text>
+                      <Text style={[styles.addFriendBtnText, isSent && { color: colors.onSurfaceVariant }]}>
+                        {isSent ? 'Sent' : 'Add'}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 );
@@ -278,140 +260,270 @@ export default function SocialScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingBottom: 10 },
+  container: { flex: 1, backgroundColor: colors.surface },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingHorizontal: 24,
+    paddingTop: 56,
     paddingBottom: 8,
   },
-  headerTitle: { fontSize: 28, fontWeight: '800', color: '#1a1a2e' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  searchButton: { padding: 4 },
-  requestBadge: {
+  headerTitle: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 28,
+    color: colors.onSurface,
+    letterSpacing: -0.3,
+  },
+
+  // Search bar (pressable placeholder)
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#6366f1',
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    gap: 4,
-  },
-  requestBadgeText: {},
-  requestBadgeCount: { color: '#fff', fontSize: 13, fontWeight: '700' },
-
-  // Request cards
-  requestsSection: { paddingHorizontal: 16, marginBottom: 8 },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: '#1a1a2e', paddingHorizontal: 0, paddingTop: 8, paddingBottom: 8 },
-  requestsScroll: { gap: 8, paddingBottom: 12 },
-  requestCard: {
-    width: 110,
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#f9f9f9',
-    borderRadius: 16,
-  },
-  requestAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#e2e8f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  requestAvatarText: { fontSize: 18, fontWeight: '700', color: '#64748b' },
-  requestName: { fontSize: 13, fontWeight: '600', color: '#333', marginBottom: 8, maxWidth: 100 },
-  requestBtns: { flexDirection: 'row', gap: 6 },
-  requestBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  acceptBtn: { backgroundColor: '#6366f1' },
-  rejectBtn: { backgroundColor: '#ef4444' },
-
-  // Friends list
-  friendsList: { flexGrow: 1 },
-  friendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f5f5f5',
+    marginHorizontal: 24,
+    marginBottom: 16,
+    paddingHorizontal: 20,
+    height: 52,
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: 26,
     gap: 12,
+    ...shadows.sm,
+  },
+  searchPlaceholder: {
+    fontFamily: fonts.body,
+    fontSize: 16,
+    color: colors.onSurfaceVariant + '80',
+  },
+
+  // Sections
+  section: { paddingHorizontal: 24, marginBottom: 16 },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.onSurface,
+    letterSpacing: -0.2,
+  },
+  countBadge: {
+    backgroundColor: colors.tertiary + '1a',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  countBadgeText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.tertiary,
+  },
+
+  // Friend Requests
+  requestsScroll: { gap: 12, paddingBottom: 8 },
+  requestCard: {
+    width: 220,
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    ...ghostBorder(0.1),
+  },
+  requestAvatarWrap: { position: 'relative', marginBottom: 12 },
+  requestAvatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.surfaceContainerHigh,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: colors.surfaceContainerLowest,
+  },
+  requestAvatarText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.onSurfaceVariant,
+  },
+  requestAvatarBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    backgroundColor: colors.tertiary,
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: colors.surfaceContainerLowest,
+  },
+  requestName: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.onSurface,
+    marginBottom: 12,
+  },
+  requestBtns: { flexDirection: 'row', gap: 8, width: '100%' },
+  acceptBtn: {
+    flex: 1,
+    backgroundColor: colors.primaryContainer,
+    borderRadius: 20,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  acceptBtnText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.onPrimary,
+  },
+  declineBtn: {
+    flex: 1,
+    backgroundColor: colors.surfaceContainerHighest,
+    borderRadius: 20,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  declineBtnText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+
+  // Friends
+  friendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 8,
+    gap: 14,
   },
   friendAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.surfaceContainerHigh,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...shadows.sm,
+  },
+  friendAvatarText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.onSurfaceVariant,
+  },
+  friendInfo: { flex: 1 },
+  friendName: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  friendBio: {
+    fontFamily: fonts.body,
+    fontSize: 13,
+    color: colors.onSurfaceVariant,
+    marginTop: 2,
+  },
+  chatBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#6366f1',
+    backgroundColor: colors.surfaceContainerHighest,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  friendAvatarText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  friendAvatarSmall: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#e2e8f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  friendAvatarSmallText: { fontSize: 14, fontWeight: '700', color: '#64748b' },
-  friendInfo: { flex: 1 },
-  friendName: { fontSize: 16, fontWeight: '600', color: '#1a1a2e' },
-  friendBio: { fontSize: 13, color: '#999', marginTop: 2 },
-  center: { alignItems: 'center', paddingVertical: 40 },
-  emptyText: { fontSize: 14, color: '#999', marginTop: 8, textAlign: 'center' },
-  emptyList: { textAlign: 'center', paddingVertical: 24, color: '#999' },
 
-  // Search modal
+  // Empty
+  emptyWrap: { alignItems: 'center', paddingVertical: 40 },
+  emptyText: { fontFamily: fonts.body, fontSize: 14, color: colors.onSurfaceVariant, marginTop: 8, textAlign: 'center' },
+  emptyList: { fontFamily: fonts.body, textAlign: 'center', paddingVertical: 24, color: colors.onSurfaceVariant },
+
+  // Search Modal
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-end' },
   modalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: colors.surfaceContainerLowest,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     maxHeight: '80%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
     paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700' },
-  searchBar: { paddingHorizontal: 16, paddingVertical: 12 },
-  searchInput: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 16,
+  modalTitle: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 20,
+    color: colors.onSurface,
+  },
+  modalSearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 24,
+    marginBottom: 12,
+    paddingHorizontal: 16,
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: 20,
+    gap: 10,
+  },
+  modalSearchInput: {
+    flex: 1,
+    fontFamily: fonts.body,
+    fontSize: 15,
+    color: colors.onSurface,
+    paddingVertical: 12,
   },
   searchResultItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 24,
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f5f5f5',
     gap: 12,
   },
-  searchResultName: { flex: 1, fontSize: 15, fontWeight: '600', color: '#1a1a2e' },
-  addBtn: {
+  searchResultAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surfaceContainerHigh,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchResultAvatarText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.onSurfaceVariant,
+  },
+  searchResultName: {
+    flex: 1,
+    fontFamily: fonts.bodySemiBold,
+    fontSize: 15,
+    color: colors.onSurface,
+  },
+  addFriendBtn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#6366f1',
+    borderRadius: 20,
+    backgroundColor: colors.primaryContainer,
   },
-  addBtnSent: { backgroundColor: '#ddd' },
-  addBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  addFriendBtnSent: {
+    backgroundColor: colors.surfaceContainerHighest,
+  },
+  addFriendBtnText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.onPrimary,
+  },
 });

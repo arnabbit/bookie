@@ -8,22 +8,21 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Alert,
+  ScrollView,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth, API_URL } from '@/lib/AuthContext';
+import { colors, fonts, typography, radius } from '@/lib/theme';
 
 export default function LoginScreen() {
-  const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [captchaQuestion, setCaptchaQuestion] = useState('');
   const [captchaId, setCaptchaId] = useState('');
   const [captchaAnswer, setCaptchaAnswer] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const router = useRouter();
   const { login } = useAuth();
 
   const fetchCaptcha = async () => {
@@ -42,38 +41,24 @@ export default function LoginScreen() {
 
   useEffect(() => { fetchCaptcha(); }, []);
 
-  const clearFields = () => {
-    setUsername('');
-    setEmail('');
-    setPassword('');
-    setError('');
-  };
-
   const handleSubmit = async () => {
-    if (!isLogin && !captchaAnswer) {
-      setError('Please solve the captcha');
-      return;
-    }
     if (!username.trim()) { setError('Username is required'); return; }
-    if (!isLogin && !email.trim()) { setError('Email is required'); return; }
     if (!password.trim()) { setError('Password is required'); return; }
+    if (!captchaAnswer.trim()) { setError('Please solve the verification'); return; }
 
     setLoading(true);
     setError('');
 
-    const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-    const body: any = { username: username.trim().toLowerCase(), password };
-    if (!isLogin) {
-      body.email = email.trim().toLowerCase();
-      body.captchaId = captchaId;
-      body.captchaAnswer = parseInt(captchaAnswer);
-    }
-
     try {
-      const res = await fetch(`${API_URL}${endpoint}`, {
+      const res = await fetch(`${API_URL}/api/auth/enter`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          username: username.trim().toLowerCase(),
+          password,
+          captchaId,
+          captchaAnswer: parseInt(captchaAnswer),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -98,96 +83,104 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <View style={styles.content}>
-        <Text style={styles.logo}>Booksocial</Text>
-        <Text style={styles.subtitle}>Share books with friends</Text>
-      </View>
-
-      <View style={styles.form}>
-        {/* Tabs */}
-        <View style={styles.tabRow}>
-          <TouchableOpacity
-            style={[styles.tab, isLogin && styles.tabActive]}
-            onPress={() => { setIsLogin(true); clearFields(); fetchCaptcha(); }}
-          >
-            <Text style={[styles.tabText, isLogin && styles.tabTextActive]}>Login</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, !isLogin && styles.tabActive]}
-            onPress={() => { setIsLogin(false); clearFields(); fetchCaptcha(); }}
-          >
-            <Text style={[styles.tabText, !isLogin && styles.tabTextActive]}>Register</Text>
-          </TouchableOpacity>
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        {/* Brand Section */}
+        <View style={styles.brandSection}>
+          <View style={styles.brandRow}>
+            <Ionicons name="book" size={32} color={colors.tertiary} />
+            <Text style={styles.brandName}>Booksocial</Text>
+          </View>
+          <Text style={styles.heroText}>
+            Where thoughts{'\n'}
+            <Text style={styles.heroItalic}>find a home.</Text>
+          </Text>
+          <Text style={styles.heroSubtitle}>
+            Join a sanctuary of modern readers. Access your library or create your legacy simply by entering your details.
+          </Text>
         </View>
 
-        <Text style={styles.label}>Username</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Username"
-          placeholderTextColor="#aaa"
-          value={username}
-          onChangeText={setUsername}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+        {/* Form Section */}
+        <View style={styles.formSection}>
+          <Text style={styles.welcomeTitle}>Welcome back</Text>
+          <Text style={styles.welcomeSubtitle}>Continue your reading journey.</Text>
 
-        {!isLogin && (
-          <>
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Email"
-              placeholderTextColor="#aaa"
-              value={email}
-              onChangeText={setEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-          </>
-        )}
+          {/* Username */}
+          <Text style={styles.label}>Username</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="archivist_01"
+            placeholderTextColor={colors.outline}
+            value={username}
+            onChangeText={setUsername}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
 
-        <Text style={styles.label}>Password</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#aaa"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          autoCapitalize="none"
-        />
+          {/* Password */}
+          <Text style={styles.label}>Password</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="••••••••"
+            placeholderTextColor={colors.outline}
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            autoCapitalize="none"
+          />
 
-        {/* Captcha (register only) */}
-        {!isLogin && captchaQuestion && (
+          {/* Captcha */}
+          <Text style={styles.label}>Verification</Text>
           <View style={styles.captchaRow}>
-            <Text style={styles.captchaText}>{captchaQuestion} = ?</Text>
+            <View style={styles.captchaBox}>
+              <Text style={styles.captchaText}>
+                {captchaQuestion || '...'}
+              </Text>
+            </View>
             <TextInput
               style={styles.captchaInput}
               placeholder="Answer"
+              placeholderTextColor={colors.outline}
               value={captchaAnswer}
               onChangeText={setCaptchaAnswer}
               keyboardType="number-pad"
               maxLength={4}
+              textAlign="center"
             />
           </View>
-        )}
 
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-        <TouchableOpacity
-          style={[styles.submitBtn, loading && styles.submitBtnLoading]}
-          onPress={handleSubmit}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitBtnText}>
-              {isLogin ? 'Login' : 'Register'}
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
+          {/* Submit */}
+          <TouchableOpacity
+            onPress={handleSubmit}
+            disabled={loading}
+            activeOpacity={0.9}
+            style={styles.submitWrap}
+          >
+            <LinearGradient
+              colors={[colors.primary, colors.primaryContainer]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.submitBtn}
+            >
+              {loading ? (
+                <ActivityIndicator color={colors.onPrimary} />
+              ) : (
+                <>
+                  <Text style={styles.submitBtnText}>Login / Enter</Text>
+                  <Ionicons name="arrow-forward" size={18} color={colors.onPrimary} />
+                </>
+              )}
+            </LinearGradient>
+          </TouchableOpacity>
+
+          <Text style={styles.termsText}>
+            By entering, you agree to our{' '}
+            <Text style={styles.termsLink}>Terms of Service</Text> and{' '}
+            <Text style={styles.termsLink}>Privacy Policy</Text>.
+          </Text>
+        </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
@@ -195,107 +188,158 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
-    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  // Brand
+  brandSection: {
+    paddingHorizontal: 32,
+    paddingTop: Platform.OS === 'ios' ? 80 : 60,
     paddingBottom: 40,
+    backgroundColor: colors.surfaceContainerLow,
   },
-  content: {
-    alignItems: 'center',
-    paddingTop: 80,
-  },
-  logo: {
-    fontSize: 42,
-    fontWeight: '800',
-    color: '#1a1a2e',
-    letterSpacing: -1,
-  },
-  subtitle: {
-    fontSize: 18,
-    color: '#666',
-    marginTop: 8,
-  },
-  form: {
-    paddingHorizontal: 24,
-    gap: 8,
-  },
-  // Tabs
-  tabRow: {
+  brandRow: {
     flexDirection: 'row',
-    backgroundColor: '#f0f0f0',
-    borderRadius: 10,
-    padding: 4,
-    marginBottom: 8,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 10,
     alignItems: 'center',
-    borderRadius: 8,
+    gap: 12,
+    marginBottom: 24,
   },
-  tabActive: {
-    backgroundColor: '#6366f1',
+  brandName: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 24,
+    fontStyle: 'italic',
+    color: colors.onSurface,
+    letterSpacing: -0.5,
   },
-  tabText: {
+  heroText: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 38,
+    color: colors.onSurface,
+    lineHeight: 46,
+    letterSpacing: -0.5,
+    marginBottom: 16,
+  },
+  heroItalic: {
+    fontFamily: fonts.headlineBoldItalic,
+    fontStyle: 'italic',
+    color: colors.tertiary,
+  },
+  heroSubtitle: {
+    fontFamily: fonts.body,
+    fontSize: 16,
+    color: colors.onSurfaceVariant,
+    lineHeight: 24,
+  },
+  // Form
+  formSection: {
+    paddingHorizontal: 32,
+    paddingTop: 32,
+    paddingBottom: 40,
+    backgroundColor: colors.surface,
+  },
+  welcomeTitle: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 28,
+    color: colors.onSurface,
+    marginBottom: 4,
+  },
+  welcomeSubtitle: {
+    fontFamily: fonts.bodyMedium,
     fontSize: 15,
-    fontWeight: '600',
-    color: '#999',
-  },
-  tabTextActive: {
-    color: '#fff',
+    color: colors.onSurfaceVariant,
+    marginBottom: 24,
   },
   label: {
-    fontSize: 13,
-    color: '#666',
-    marginTop: 8,
+    fontFamily: fonts.bodyBold,
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+    color: colors.onSurfaceVariant,
+    marginTop: 16,
+    marginBottom: 6,
+    marginLeft: 4,
   },
   input: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    color: '#1a1a2e',
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: radius.lg,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    fontSize: 15,
+    fontFamily: fonts.body,
+    color: colors.onSurface,
+    borderWidth: 0,
   },
   // Captcha
   captchaRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     gap: 12,
-    marginTop: 4,
+  },
+  captchaBox: {
+    flex: 1,
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: radius.lg,
+    height: 56,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   captchaText: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1a1a2e',
+    fontFamily: fonts.headlineBold,
+    fontSize: 22,
+    color: colors.onSurface,
+    letterSpacing: 4,
   },
   captchaInput: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 12,
-    padding: 14,
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: radius.lg,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
     fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    color: '#1a1a2e',
+    fontFamily: fonts.bodyBold,
+    fontWeight: '700',
+    letterSpacing: 3,
+    color: colors.onSurface,
+    borderWidth: 0,
   },
   errorText: {
-    color: '#ef4444',
-    fontSize: 14,
+    color: colors.error,
+    fontSize: 13,
+    fontFamily: fonts.bodyMedium,
+    marginTop: 8,
+  },
+  // Submit
+  submitWrap: {
+    marginTop: 20,
+    borderRadius: radius.lg,
+    overflow: 'hidden',
   },
   submitBtn: {
-    backgroundColor: '#6366f1',
-    borderRadius: 12,
-    padding: 16,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 12,
-  },
-  submitBtnLoading: {
-    opacity: 0.7,
+    justifyContent: 'center',
+    paddingVertical: 16,
+    gap: 8,
   },
   submitBtnText: {
-    color: '#fff',
+    color: colors.onPrimary,
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: fonts.bodyBold,
+    fontWeight: '700',
+  },
+  termsText: {
+    fontFamily: fonts.body,
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+    textAlign: 'center',
+    marginTop: 24,
+    lineHeight: 18,
+  },
+  termsLink: {
+    fontFamily: fonts.bodyBold,
+    fontWeight: '700',
+    color: colors.onSurface,
   },
 });

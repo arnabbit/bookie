@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,600;0,700;1,400&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "primary-fixed": "#d7e2ff",
+                    "on-primary-fixed": "#101b30",
+                    "surface-container-lowest": "#ffffff",
+                    "on-secondary": "#ffffff",
+                    "inverse-on-surface": "#f3f0eb",
+                    "surface-container-high": "#ebe8e3",
+                    "on-primary-container": "#79849d",
+                    "inverse-primary": "#bbc6e2",
+                    "on-secondary-fixed": "#251a04",
+                    "on-error-container": "#93000a",
+                    "surface-container-low": "#f6f3ee",
+                    "outline-variant": "#c4c6cc",
+                    "tertiary-fixed": "#ffe16d",
+                    "surface-container": "#f0ede8",
+                    "surface-container-highest": "#e5e2dd",
+                    "primary-container": "#101b30",
+                    "on-tertiary-fixed": "#221b00",
+                    "on-background": "#1c1c19",
+                    "tertiary-fixed-dim": "#e9c400",
+                    "on-primary-fixed-variant": "#3c475d",
+                    "on-secondary-container": "#716043",
+                    "error": "#ba1a1a",
+                    "on-surface": "#1c1c19",
+                    "tertiary-container": "#c9a900",
+                    "surface-tint": "#545e76",
+                    "secondary-fixed": "#f7dfbb",
+                    "tertiary": "#705d00",
+                    "surface-bright": "#fcf9f4",
+                    "surface": "#fcf9f4",
+                    "secondary": "#6d5c40",
+                    "on-tertiary": "#ffffff",
+                    "surface-variant": "#e5e2dd",
+                    "surface-dim": "#dcdad5",
+                    "inverse-surface": "#31302d",
+                    "secondary-fixed-dim": "#dac3a1",
+                    "secondary-container": "#f4dcb8",
+                    "primary-fixed-dim": "#bbc6e2",
+                    "on-primary": "#ffffff",
+                    "on-tertiary-fixed-variant": "#544600",
+                    "primary": "#000000",
+                    "on-tertiary-container": "#4c3e00",
+                    "on-error": "#ffffff",
+                    "outline": "#74777d",
+                    "on-surface-variant": "#44474c",
+                    "background": "#fcf9f4",
+                    "error-container": "#ffdad6",
+                    "on-secondary-fixed-variant": "#54442a"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "fontFamily": {
+                    "headline": ["Noto Serif"],
+                    "body": ["Manrope"],
+                    "label": ["Manrope"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body { font-family: 'Manrope', sans-serif; }
+        h1, h2, h3 { font-family: 'Noto Serif', serif; }
+        .glass-nav {
+            background: rgba(252, 249, 244, 0.8);
+            backdrop-filter: blur(12px);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface selection:bg-secondary-container">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 bg-[#fcf9f4]/80 dark:bg-slate-950/80 backdrop-blur-xl shadow-sm dark:shadow-none">
+<div class="flex justify-between items-center px-6 py-4 w-full max-w-screen-xl mx-auto">
+<div class="flex items-center gap-4">
+<button class="text-[#0D1B2A] dark:text-slate-100 active:scale-95 duration-200">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<h1 class="font-noto-serif text-2xl font-semibold tracking-tight text-[#0D1B2A] dark:text-slate-100">Social</h1>
+</div>
+<div class="w-10 h-10 rounded-full overflow-hidden border border-outline-variant/20">
+<img alt="User profile avatar" class="w-full h-full object-cover" data-alt="Close-up portrait of a thoughtful man with a short beard in a library setting, warm academic lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB1XqcDowFcTBjECUzqYTWLbjXeGdyxO2Kes7vlUy00Mwt1N2_8RhxLabvM5EZXsP8VBXVp1dl4I-lGquKbeJP690pMF9q3JWKCoQsBqvLEQUdg8QvpEFHcm6uKu28rgvXZDwjmRBw65JiRrbBm-QwwTR7QftmmyXVsntWrYGBr5heDr_DGYmdv6yVW7w3Xcbm0zwR5yUfrqPuHiK4a-O5Yq6bKIqqiHGRKaeNpcTKS4eNkmtaXD6yIZM_1TEV5Eiddp3mfcomLEgKD"/>
+</div>
+</div>
+<div class="bg-[#e5e2dd] dark:bg-slate-800 h-[1px] w-full opacity-30"></div>
+</header>
+<main class="pt-24 pb-32 px-6 max-w-screen-xl mx-auto">
+<!-- Search Section -->
+<section class="mb-10">
+<div class="relative group">
+<div class="absolute inset-y-0 left-5 flex items-center pointer-events-none text-on-surface-variant">
+<span class="material-symbols-outlined">search</span>
+</div>
+<input class="w-full h-14 pl-14 pr-6 rounded-full bg-surface-container-high border-none focus:ring-2 focus:ring-tertiary focus:bg-surface-container-lowest transition-all duration-300 font-body text-lg shadow-sm" placeholder="Find new friends" type="text"/>
+</div>
+</section>
+<!-- Friend Requests Section -->
+<section class="mb-12">
+<div class="flex items-baseline justify-between mb-6">
+<h2 class="text-2xl font-bold tracking-tight">Friend Requests</h2>
+<span class="text-tertiary font-label text-sm font-bold bg-tertiary/10 px-3 py-1 rounded-full">3 New</span>
+</div>
+<div class="flex overflow-x-auto gap-5 pb-6 scrollbar-hide -mx-2 px-2">
+<!-- Request Card 1 -->
+<div class="min-w-[280px] bg-surface-container-low p-5 rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.02)] border border-white/50 flex flex-col items-center text-center">
+<div class="relative mb-4">
+<img alt="Clara" class="w-20 h-20 rounded-full object-cover ring-4 ring-white" data-alt="Portrait of a woman with glasses reading a book in a sunlit conservatory, soft focus greenery" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAa8Pjl6DFrfFJlEMe7H8oxVLlXzqjGamaMYpRnM_VW5L86ms2RJfeFRDP2UILIQporEdMEGNG56R_OlIiZhdzZTBzJQ7eXU8U_SKXPrRGtxaFGUavaMeIypqKLBeZjrAS5uZp4HoYnRL5MZLI9m-vEfq7lxDTvfVyRdgh0KgeyUvrVfQOWYAW4LGsvTO4rgcox0mHPA5MAgGlBYbMKKpmvFbU_h1-1jMPOcNCc7xEk4dmLYjm80qRI26ru96tWdGuPrQfvfyfhtbia"/>
+<div class="absolute -bottom-1 -right-1 bg-tertiary text-white p-1 rounded-full border-2 border-white">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">auto_stories</span>
+</div>
+</div>
+<h3 class="text-lg font-bold mb-1">Clara Oswald</h3>
+<p class="text-sm text-on-surface-variant mb-5 line-clamp-1 italic">Reading: "The Bell Jar"</p>
+<div class="flex gap-3 w-full">
+<button class="flex-1 bg-primary-container text-white py-3 rounded-full font-label text-sm font-bold hover:opacity-90 active:scale-95 transition-all">Accept</button>
+<button class="flex-1 bg-surface-container-highest text-on-surface py-3 rounded-full font-label text-sm font-bold hover:bg-surface-dim active:scale-95 transition-all">Decline</button>
+</div>
+</div>
+<!-- Request Card 2 -->
+<div class="min-w-[280px] bg-surface-container-low p-5 rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.02)] border border-white/50 flex flex-col items-center text-center">
+<div class="relative mb-4">
+<img alt="Arthur" class="w-20 h-20 rounded-full object-cover ring-4 ring-white" data-alt="Close up portrait of a young man with curly hair smiling in a modern library, warm interior light" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCzaFRXkDLAvQ2FgNCDRzRdLTQXI5P-2MMkcZFxMl3kFdrzaY-4efz9b4gwzNdjWm6RgihG2TynNJ7aM8mPt_pur5jjqGOhm_QZeCX7JFjeVJv41I4XvaV0pGYMAPnoD3sWkwLqUNJLkSC6ELsV-vLt1LlHysLdJMcyPNBIOYgVgPI__y_Y2e-TslF7O5_Rq4ab_ELeauEwNWP9MwJU_9TbfU1rnoh-ZORTIAIeVa6_0kgM2qgBZBBUGU8RY9K3bTob9QyyyKv56dE-"/>
+</div>
+<h3 class="text-lg font-bold mb-1">Arthur Dent</h3>
+<p class="text-sm text-on-surface-variant mb-5 italic">Reading: "Foundation"</p>
+<div class="flex gap-3 w-full">
+<button class="flex-1 bg-primary-container text-white py-3 rounded-full font-label text-sm font-bold hover:opacity-90 active:scale-95 transition-all">Accept</button>
+<button class="flex-1 bg-surface-container-highest text-on-surface py-3 rounded-full font-label text-sm font-bold hover:bg-surface-dim active:scale-95 transition-all">Decline</button>
+</div>
+</div>
+<!-- Request Card 3 -->
+<div class="min-w-[280px] bg-surface-container-low p-5 rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.02)] border border-white/50 flex flex-col items-center text-center">
+<div class="relative mb-4">
+<img alt="Elena" class="w-20 h-20 rounded-full object-cover ring-4 ring-white" data-alt="Artistic profile of a woman with dark hair against a textured beige wall, minimalist aesthetic" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBetqAT9lSUNlsGMPMQlLNLURjhYwsgw6H0woaUTfI8FNh_XZMB7EYlc2KRBV-YPBCAwRxHgSrYt-KvXgNCLsALhHaPyhawcO3i4rffSLkTEZoH2ndGE39EBD8N8SysmHVjZ7vwO5OJJk-y8kiYdZQqJ3nPgXRSNcBBzOcPr-vYUp1DjtrqY0l8ADpEE2Ga9kpmktsi5PqAEswtBpB9BIJRS47mZ0wT5oi_QK22HqmrOLPJ81zITljMGkmavhGHvK7zEGOb5tUm-iDK"/>
+</div>
+<h3 class="text-lg font-bold mb-1">Elena Ferrante</h3>
+<p class="text-sm text-on-surface-variant mb-5 italic">Reading: "The Lying Life of Adults"</p>
+<div class="flex gap-3 w-full">
+<button class="flex-1 bg-primary-container text-white py-3 rounded-full font-label text-sm font-bold hover:opacity-90 active:scale-95 transition-all">Accept</button>
+<button class="flex-1 bg-surface-container-highest text-on-surface py-3 rounded-full font-label text-sm font-bold hover:bg-surface-dim active:scale-95 transition-all">Decline</button>
+</div>
+</div>
+</div>
+</section>
+<!-- My Friends List -->
+<section>
+<h2 class="text-2xl font-bold tracking-tight mb-6">My Friends</h2>
+<div class="space-y-4">
+<!-- Friend Row 1 -->
+<div class="flex items-center gap-4 p-4 rounded-2xl bg-surface-container-low hover:bg-surface-container transition-colors cursor-pointer group">
+<div class="relative flex-shrink-0">
+<img alt="Julian" class="w-16 h-16 rounded-full object-cover grayscale group-hover:grayscale-0 transition-all duration-500 shadow-sm" data-alt="Portrait of an intellectual man with glasses and a tweed jacket in a classic study" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBiCiRhOXweeZFy534SfdZb3DrWTXGRFBSxLZEuXuNFjM4u_iZdwvfgIba_0RQSo9ymFDOf6paaXAuziO6_XPhx1m4bqkxIabX0AgpZV5oU88fj6osyaufGNOzjuEeH8gJgkxE1tgbrtIOWwrWzGZZelwON9Om62zmVjcC_SFD_kywOzElyZtVN72dfbdAlw1ZMrj-kP5IaU8VI5aOeSrwCcg7xznrjTcRGu__oXus1IpMO2Y4viQnHlubr8eKTJq2wy0EnC60Il8MB"/>
+<div class="absolute bottom-0 right-0 w-4 h-4 bg-green-500 border-2 border-white rounded-full"></div>
+</div>
+<div class="flex-1 min-w-0">
+<div class="flex justify-between items-baseline">
+<h3 class="text-lg font-bold text-on-surface truncate">Julian Barnes</h3>
+<span class="text-[10px] uppercase tracking-wider font-bold text-on-surface-variant/60">Active Now</span>
+</div>
+<p class="text-sm text-tertiary font-medium mt-0.5 flex items-center gap-1.5">
+<span class="material-symbols-outlined text-sm">menu_book</span>
+                            Currently reading: <span class="italic">Sense of an Ending</span>
+</p>
+</div>
+<button class="w-12 h-12 flex items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant hover:bg-primary-container hover:text-white transition-all">
+<span class="material-symbols-outlined">chat_bubble</span>
+</button>
+</div>
+<!-- Friend Row 2 -->
+<div class="flex items-center gap-4 p-4 rounded-2xl bg-surface-container-low hover:bg-surface-container transition-colors cursor-pointer group">
+<div class="relative flex-shrink-0">
+<img alt="Zadie" class="w-16 h-16 rounded-full object-cover shadow-sm grayscale group-hover:grayscale-0 transition-all duration-500" data-alt="Close up portrait of a smiling woman with braided hair, soft studio lighting, neutral background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBjRrD_bIj4LmfMDKGI5SNbdCM5P9GyyHZDoXUF4PJNiQ0OZz773vVZnFkzY4s5NB8UkBYYAje0IBHUUykKhaN-dVRpg6FV-Wf46ACAcXov0EXM9M_sYZbVm6PjtAo1HeUWXdx6liJiJVedImDuabRzVHfOhE9dF6cuLK2Cja4GxjDB6nLj8JT_DtbmxoSyC211_0Uv_JTv0mKv7qkz6ztD73rxBP-frmvQjaYByxw54Hhc_98HCK1YKy2lJnjldJo4nWcyXjFLOIoL"/>
+</div>
+<div class="flex-1 min-w-0">
+<div class="flex justify-between items-baseline">
+<h3 class="text-lg font-bold text-on-surface truncate">Zadie Smith</h3>
+<span class="text-[10px] uppercase tracking-wider font-bold text-on-surface-variant/60">2h ago</span>
+</div>
+<p class="text-sm text-on-surface-variant mt-0.5 flex items-center gap-1.5">
+<span class="material-symbols-outlined text-sm">done_all</span>
+                            Finished: <span class="italic">White Teeth</span>
+</p>
+</div>
+<button class="w-12 h-12 flex items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant hover:bg-primary-container hover:text-white transition-all">
+<span class="material-symbols-outlined">chat_bubble</span>
+</button>
+</div>
+<!-- Friend Row 3 -->
+<div class="flex items-center gap-4 p-4 rounded-2xl bg-surface-container-low hover:bg-surface-container transition-colors cursor-pointer group">
+<div class="relative flex-shrink-0">
+<img alt="Haruki" class="w-16 h-16 rounded-full object-cover shadow-sm grayscale group-hover:grayscale-0 transition-all duration-500" data-alt="Portrait of an older man with a serene expression, soft morning light in an urban apartment" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCNV5ICMwQUWWOsddzouQK__-QTZfsgJ_BvdA-XLm42kGGdcqrtUT6a0xoRWplCmp9ZXwkerN7Y-ZO3RcwM7uWO0DDNZ44mJw4iV-_aWX_A3ixlw1A4mq_grmoHi023liLt31k2U4cVlltfMmeMY05O7dVBg77jJyktto1YnGkMr61MhTbdDVM54_b8GhjKgG42Ca2cuBXKczBaDvuLpPydJMUcsGcFo1O2-DIRcbYvS4Dqgzx0APeGVQCGHurv_B4GV1w_7oBgBzK5"/>
+</div>
+<div class="flex-1 min-w-0">
+<div class="flex justify-between items-baseline">
+<h3 class="text-lg font-bold text-on-surface truncate">Haruki Murakami</h3>
+<span class="text-[10px] uppercase tracking-wider font-bold text-on-surface-variant/60">1d ago</span>
+</div>
+<p class="text-sm text-tertiary font-medium mt-0.5 flex items-center gap-1.5">
+<span class="material-symbols-outlined text-sm">star</span>
+                            Wishlisted: <span class="italic">The Wind-Up Bird Chronicle</span>
+</p>
+</div>
+<button class="w-12 h-12 flex items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant hover:bg-primary-container hover:text-white transition-all">
+<span class="material-symbols-outlined">chat_bubble</span>
+</button>
+</div>
+<!-- Friend Row 4 -->
+<div class="flex items-center gap-4 p-4 rounded-2xl bg-surface-container-low hover:bg-surface-container transition-colors cursor-pointer group">
+<div class="relative flex-shrink-0">
+<img alt="Joan" class="w-16 h-16 rounded-full object-cover shadow-sm grayscale group-hover:grayscale-0 transition-all duration-500" data-alt="Portrait of an elegant woman in a black turtleneck, soft natural light, minimalist background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAq1X5jxmrN0edqtlW0-rHRJYBeeF8mCOw2Z9vbxpGGHOdclDxtdy0OE_Cj07wSi6TH4Pf1As0LQV9r_9kU-JunNiNx6BnHBLPS031sW-NfaNRamqd7wtJg0Z6vKmVQ3KfyvzeWHgAmY7uHk0ea93ZelZ7gCYVPKAXnDPxH_wQkQKLggT9t3RfHAooyBvWRDj3k9kEnmsl_VMubhE1u4GzyHjZtzX0P8P2CqVrerziyn9RE5y8sGNH5oGLjJ2hM_vVAyM4Q3aXf7nMr"/>
+</div>
+<div class="flex-1 min-w-0">
+<div class="flex justify-between items-baseline">
+<h3 class="text-lg font-bold text-on-surface truncate">Joan Didion</h3>
+<span class="text-[10px] uppercase tracking-wider font-bold text-on-surface-variant/60">3d ago</span>
+</div>
+<p class="text-sm text-on-surface-variant mt-0.5 flex items-center gap-1.5">
+<span class="material-symbols-outlined text-sm">bookmark</span>
+                            Saved: <span class="italic">Play It as It Lays</span>
+</p>
+</div>
+<button class="w-12 h-12 flex items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant hover:bg-primary-container hover:text-white transition-all">
+<span class="material-symbols-outlined">chat_bubble</span>
+</button>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full flex justify-around items-center px-4 pb-6 pt-3 bg-[#fcf9f4]/80 dark:bg-slate-950/80 backdrop-blur-xl z-50 rounded-t-3xl shadow-[0_-4px_24px_0_rgba(28,28,25,0.06)]">
+<a class="flex flex-col items-center justify-center text-[#1c1c19]/60 dark:text-slate-400 px-4 py-2 transition-all duration-300 ease-in-out hover:text-[#0D1B2A] dark:hover:text-white" href="#">
+<span class="material-symbols-outlined">auto_stories</span>
+<span class="font-manrope text-[11px] font-medium tracking-wide uppercase mt-1">Library</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-gradient-to-br from-[#0D1B2A] to-[#101b30] text-white rounded-xl px-4 py-2 transition-all duration-300 ease-in-out" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">group</span>
+<span class="font-manrope text-[11px] font-medium tracking-wide uppercase mt-1">Social</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#1c1c19]/60 dark:text-slate-400 px-4 py-2 transition-all duration-300 ease-in-out hover:text-[#0D1B2A] dark:hover:text-white" href="#">
+<span class="material-symbols-outlined">edit_note</span>
+<span class="font-manrope text-[11px] font-medium tracking-wide uppercase mt-1">Activity</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#1c1c19]/60 dark:text-slate-400 px-4 py-2 transition-all duration-300 ease-in-out hover:text-[#0D1B2A] dark:hover:text-white" href="#">
+<span class="material-symbols-outlined">person</span>
+<span class="font-manrope text-[11px] font-medium tracking-wide uppercase mt-1">Profile</span>
+</a>
+</nav>
+</body></html>

@@ -1,32 +1,29 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Platform, Text, View } from 'react-native';
+import { Platform, StyleSheet, View, Text } from 'react-native';
 import React from 'react';
+import { BlurView } from 'expo-blur';
+import { colors, fonts } from '@/lib/theme';
 
-function TabIcon({ name, size }: { name: string; size: number }) {
-  if (Platform.OS === 'web') {
-    const emojiMap: Record<string, string> = {
-      'book-outline': '📖',
-      'library-outline': '📖',
-      'people': '👥',
-      'person-circle': '👤',
-    };
-    return <Text style={{ fontSize: size }}>{emojiMap[name] || '📄'}</Text>;
+function TabBarBackground() {
+  if (Platform.OS === 'ios') {
+    return (
+      <BlurView intensity={60} tint="light" style={StyleSheet.absoluteFill} />
+    );
   }
-  return <Ionicons name={name as any} size={size} color={'#999'} />;
+  return <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(252,249,244,0.92)' }]} />;
 }
 
-function TabIconActive({ name, size }: { name: string; size: number }) {
-  if (Platform.OS === 'web') {
-    const emojiMap: Record<string, string> = {
-      'book-outline': '📖',
-      'library-outline': '📖',
-      'people': '👥',
-      'person-circle': '👤',
-    };
-    return <Text style={{ fontSize: size }}>{emojiMap[name] || '📄'}</Text>;
-  }
-  return <Ionicons name={name as any} size={size} color={'#6366f1'} />;
+function TabIcon({ name, focused }: { name: keyof typeof Ionicons.glyphMap; focused: boolean }) {
+  return (
+    <View style={focused ? styles.activeIconWrap : styles.inactiveIconWrap}>
+      <Ionicons
+        name={name}
+        size={22}
+        color={focused ? colors.onSurface : colors.onSurfaceVariant + '99'}
+      />
+    </View>
+  );
 }
 
 export default function TabLayout() {
@@ -34,49 +31,71 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#6366f1',
-        tabBarInactiveTintColor: '#999',
-        tabBarStyle: {
-          borderTopWidth: 1,
-          borderTopColor: '#eee',
-          paddingBottom: 8,
-          paddingTop: 8,
-          height: 60,
+        tabBarActiveTintColor: colors.onSurface,
+        tabBarInactiveTintColor: colors.onSurfaceVariant + '99',
+        tabBarLabelStyle: {
+          fontFamily: fonts.bodyBold,
+          fontSize: 9,
+          fontWeight: '700',
+          textTransform: 'uppercase',
+          letterSpacing: 1.5,
+          marginTop: -2,
         },
+        tabBarStyle: {
+          position: 'absolute',
+          borderTopWidth: 0,
+          borderTopLeftRadius: 24,
+          borderTopRightRadius: 24,
+          paddingBottom: Platform.OS === 'ios' ? 24 : 10,
+          paddingTop: 8,
+          height: Platform.OS === 'ios' ? 80 : 64,
+          elevation: 0,
+          ...Platform.select({
+            ios: {
+              shadowColor: colors.onSurface,
+              shadowOffset: { width: 0, height: -4 },
+              shadowOpacity: 0.04,
+              shadowRadius: 24,
+            },
+            default: {},
+          }),
+        },
+        tabBarBackground: () => <TabBarBackground />,
       }}>
       <Tabs.Screen
         name="books"
         options={{
-          title: 'Books',
-          tabBarIcon: ({ color, size, focused }) => (
-            focused
-              ? <TabIconActive name="book-outline" size={size} />
-              : <TabIcon name="book-outline" size={size} />
-          ),
+          title: 'Library',
+          tabBarIcon: ({ focused }) => <TabIcon name={focused ? 'book' : 'book-outline'} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="social"
         options={{
           title: 'Social',
-          tabBarIcon: ({ color, size, focused }) => (
-            focused
-              ? <TabIconActive name="people" size={size} />
-              : <TabIcon name="people" size={size} />
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon name={focused ? 'people' : 'people-outline'} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color, size, focused }) => (
-            focused
-              ? <TabIconActive name="person-circle" size={size} />
-              : <TabIcon name="person-circle" size={size} />
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon name={focused ? 'person' : 'person-outline'} focused={focused} />,
         }}
       />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  activeIconWrap: {
+    backgroundColor: colors.surfaceContainerHighest,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+  },
+  inactiveIconWrap: {
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+  },
+});

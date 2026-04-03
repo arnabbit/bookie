@@ -1,4 +1,5 @@
 import { API_URL, useAuth } from '@/lib/AuthContext';
+import { colors, fonts, shadows } from '@/lib/theme';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -17,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { io } from 'socket.io-client';
 
 export default function BookReaderScreen() {
-  const { id } = useLocalSearchParams();
+  const { id, format } = useLocalSearchParams();
   const { token, user } = useAuth();
   const [book, setBook] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -38,7 +39,7 @@ export default function BookReaderScreen() {
     (async () => {
       try {
         const [bookRes, posRes] = await Promise.all([
-          fetch(`${API_URL}/api/books/${id}`, {
+          fetch(`${API_URL}/api/books/${id}/read?format=${format || 'mini'}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
           fetch(`${API_URL}/api/books/${id}/position`, {
@@ -192,7 +193,7 @@ export default function BookReaderScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#6366f1" />
+        <ActivityIndicator size="large" color={colors.tertiary} />
       </View>
     );
   }
@@ -234,10 +235,10 @@ export default function BookReaderScreen() {
             }}
             style={styles.headerBtn}
           >
-            <Ionicons name="chatbubble-outline" size={22} color="#6366f1" />
+            <Ionicons name="chatbubble-outline" size={22} color={colors.tertiary} />
           </TouchableOpacity>
           <TouchableOpacity onPress={openShareModal} style={styles.headerBtn}>
-            <Ionicons name="share-outline" size={22} color="#6366f1" />
+            <Ionicons name="share-outline" size={22} color={colors.tertiary} />
           </TouchableOpacity>
         </View>
       </View>
@@ -270,11 +271,11 @@ export default function BookReaderScreen() {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Share Page {currentPage + 1}</Text>
               <TouchableOpacity onPress={() => setShowShareModal(false)}>
-                <Ionicons name="close" size={24} color="#333" />
+                <Ionicons name="close" size={24} color={colors.onSurface} />
               </TouchableOpacity>
             </View>
             {actionLoading ? (
-              <ActivityIndicator size="large" color="#6366f1" style={{ padding: 32 }} />
+              <ActivityIndicator size="large" color={colors.tertiary} style={{ padding: 32 }} />
             ) : (
               <FlatList
                 data={friends}
@@ -306,7 +307,7 @@ export default function BookReaderScreen() {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Comments — Page {currentPage + 1}</Text>
               <TouchableOpacity onPress={() => setShowCommentModal(false)}>
-                <Ionicons name="close" size={24} color="#333" />
+                <Ionicons name="close" size={24} color={colors.onSurface} />
               </TouchableOpacity>
             </View>
 
@@ -363,18 +364,17 @@ export default function BookReaderScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: colors.surface },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
     height: 48,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
     justifyContent: 'space-between',
+    backgroundColor: colors.surface,
   },
-  pageIndicator: { fontSize: 14, color: '#999', fontWeight: '600' },
+  pageIndicator: { fontFamily: fonts.bodySemiBold, fontSize: 14, color: colors.onSurfaceVariant },
   headerActions: { flexDirection: 'row', gap: 8 },
   headerBtn: { padding: 4 },
   pageCard: {
@@ -382,75 +382,73 @@ const styles = StyleSheet.create({
     paddingVertical: 60,
     justifyContent: 'center',
   },
-  pageText: { fontSize: 17, lineHeight: 28, color: '#333' },
-  noContent: { fontSize: 16, color: '#ccc', marginTop: 40, textAlign: 'center' },
+  pageText: { fontFamily: fonts.headline, fontSize: 17, lineHeight: 28, color: colors.onSurface },
+  noContent: { fontFamily: fonts.body, fontSize: 16, color: colors.outlineVariant, marginTop: 40, textAlign: 'center' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-end' },
   modalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: colors.surfaceContainerLowest,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     maxHeight: '60%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
     paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
   },
-  modalTitle: { fontSize: 18, fontWeight: '700' },
-  emptyList: { textAlign: 'center', padding: 24, color: '#999' },
+  modalTitle: { fontFamily: fonts.headlineBold, fontSize: 18, color: colors.onSurface },
+  emptyList: { fontFamily: fonts.body, textAlign: 'center', padding: 24, color: colors.onSurfaceVariant },
   friendItem: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
   friendAvatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#6366f1',
+    backgroundColor: colors.surfaceContainerHigh,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  friendAvatarText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  friendName: { fontSize: 16, fontWeight: '600', color: '#1a1a2e' },
+  friendAvatarText: { fontFamily: fonts.bodyBold, color: colors.onSurfaceVariant, fontSize: 14 },
+  friendName: { fontFamily: fonts.bodySemiBold, fontSize: 16, color: colors.onSurface },
   commentModalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    backgroundColor: colors.surfaceContainerLowest,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     maxHeight: '70%',
   },
   commentsList: { maxHeight: 300 },
-  commentItem: { padding: 16, paddingTop: 4, borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
+  commentItem: { padding: 16, paddingTop: 4 },
   commentHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   commentAvatarSmall: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#e2e8f0',
+    backgroundColor: colors.surfaceContainerHigh,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  commentAvatarTextSmall: { fontSize: 11, fontWeight: '700', color: '#64748b' },
-  commentUser: { fontSize: 14, fontWeight: '600' },
-  commentTime: { fontSize: 11, color: '#aaa', marginLeft: 'auto' },
-  commentContent: { fontSize: 14, color: '#333', lineHeight: 20 },
-  commentDelete: { fontSize: 12, color: '#ef4444' },
+  commentAvatarTextSmall: { fontFamily: fonts.bodyBold, fontSize: 11, color: colors.onSurfaceVariant },
+  commentUser: { fontFamily: fonts.bodySemiBold, fontSize: 14, color: colors.onSurface },
+  commentTime: { fontFamily: fonts.body, fontSize: 11, color: colors.onSurfaceVariant, marginLeft: 'auto' },
+  commentContent: { fontFamily: fonts.body, fontSize: 14, color: colors.onSurface, lineHeight: 20 },
+  commentDelete: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.error },
   commentInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
     gap: 8,
   },
   commentInput: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.surfaceContainerHigh,
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 10,
+    fontFamily: fonts.body,
     fontSize: 14,
+    color: colors.onSurface,
   },
   sendCommentBtn: { padding: 8 },
   sendCommentBtnDisabled: { opacity: 0.4 },

@@ -8,9 +8,12 @@ import {
   TextInput,
   Platform,
   Alert,
+  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth, API_URL } from '@/lib/AuthContext';
+import { colors, fonts, radius, shadows, ghostBorder } from '@/lib/theme';
 
 export default function ProfileScreen() {
   const { user, token, logout } = useAuth();
@@ -33,119 +36,269 @@ export default function ProfileScreen() {
     try {
       await fetch(`${API_URL}/api/users/me`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ bio }),
       });
       setEditing(false);
-    } catch { /* ignore */ }
+    } catch {}
   };
 
-  return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Profile</Text>
+  const initials = user?.username?.substring(0, 2)?.toUpperCase() || 'U';
 
-      <View style={styles.profileSection}>
-        <View style={styles.avatarContainer}>
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 120 }}>
+      {/* Avatar Section */}
+      <View style={styles.avatarSection}>
+        <View style={styles.avatarRing}>
           {user?.avatar ? (
             <Image source={{ uri: user.avatar }} style={styles.avatar} />
           ) : (
-            <Text style={styles.avatarFallback}>
-              {user?.username?.substring(0, 2)?.toUpperCase() || 'U'}
-            </Text>
+            <View style={styles.avatarFallback}>
+              <Text style={styles.avatarFallbackText}>{initials}</Text>
+            </View>
           )}
+          <TouchableOpacity style={styles.editAvatarBtn}>
+            <Ionicons name="pencil" size={14} color={colors.onTertiary} />
+          </TouchableOpacity>
         </View>
-        <Text style={styles.username}>@{user?.username}</Text>
-        <Text style={styles.email}>{user?.email}</Text>
-      </View>
 
-      <View style={styles.bioSection}>
-        <Text style={styles.bioLabel}>Bio</Text>
+        <Text style={styles.displayName}>{user?.username}</Text>
+        <Text style={styles.memberLabel}>Member</Text>
+
+        {/* Bio */}
         {editing ? (
-          <>
+          <View style={styles.bioEditWrap}>
             <TextInput
               style={styles.bioInput}
               value={bio}
               onChangeText={setBio}
               multiline
               maxLength={150}
-              placeholder="Tell others about yourself..."
+              placeholder="Write about yourself..."
+              placeholderTextColor={colors.onSurfaceVariant + '80'}
             />
-            <TouchableOpacity style={styles.saveBtn} onPress={saveBio}>
-              <Text style={styles.saveBtnText}>Save</Text>
+            <TouchableOpacity style={styles.saveBioBtn} onPress={saveBio}>
+              <Text style={styles.saveBioBtnText}>Save</Text>
             </TouchableOpacity>
-          </>
+          </View>
         ) : (
-          <TouchableOpacity onPress={() => setEditing(true)}>
-            <Text style={styles.bioText || styles.bioPlaceholder}>
-              {bio || 'Tap to add bio'}
+          <TouchableOpacity onPress={() => setEditing(true)} style={styles.bioWrap}>
+            <Text style={bio ? styles.bioText : styles.bioPlaceholder}>
+              {bio || '"Tap to add a bio..."'}
             </Text>
           </TouchableOpacity>
         )}
       </View>
 
+      {/* Stats */}
+      <View style={styles.statsGrid}>
+        <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerLow }]}>
+          <Text style={[styles.statNumber, { color: colors.tertiary }]}>0</Text>
+          <Text style={styles.statLabel}>Books Read</Text>
+        </View>
+        <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerHighest }]}>
+          <Text style={styles.statNumber}>0</Text>
+          <Text style={styles.statLabel}>Pages Read</Text>
+        </View>
+        <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerLow }]}>
+          <Text style={styles.statNumber}>0</Text>
+          <Text style={styles.statLabel}>Friends</Text>
+        </View>
+      </View>
+
+      {/* Menu Items */}
+      <View style={styles.menuSection}>
+        <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/settings' as any)}>
+          <Ionicons name="settings-outline" size={22} color={colors.tertiary} />
+          <Text style={styles.menuRowText}>Account Settings</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.outlineVariant} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/help' as any)}>
+          <Ionicons name="help-circle-outline" size={22} color={colors.tertiary} />
+          <Text style={styles.menuRowText}>Help & Support</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.outlineVariant} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Logout */}
       <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Logout</Text>
+        <Ionicons name="log-out-outline" size={20} color={colors.error} />
+        <Text style={styles.logoutText}>Logout from Booksocial</Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingBottom: 10 },
-  header: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#1a1a2e',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 16,
+  container: { flex: 1, backgroundColor: colors.surface },
+
+  // Avatar section
+  avatarSection: {
+    alignItems: 'center',
+    paddingTop: 56,
+    paddingBottom: 32,
+    paddingHorizontal: 32,
   },
-  profileSection: { alignItems: 'center', paddingVertical: 24, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  avatarContainer: { marginBottom: 12 },
-  avatar: { width: 80, height: 80, borderRadius: 40 },
+  avatarRing: { position: 'relative', marginBottom: 16 },
+  avatar: {
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    borderWidth: 6,
+    borderColor: colors.surfaceContainerLow,
+  },
   avatarFallback: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#6366f1',
-    color: '#fff',
-    fontSize: 28,
-    fontWeight: '700',
-    textAlign: 'center',
-    lineHeight: 80,
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    backgroundColor: colors.surfaceContainerHigh,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 6,
+    borderColor: colors.surfaceContainerLow,
   },
-  username: { fontSize: 20, fontWeight: '700', color: '#1a1a2e' },
-  email: { fontSize: 14, color: '#999', marginTop: 2 },
-  bioSection: { paddingHorizontal: 24, paddingTop: 20 },
-  bioLabel: { fontSize: 14, fontWeight: '600', color: '#666', marginBottom: 8 },
+  avatarFallbackText: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 40,
+    color: colors.onSurfaceVariant,
+  },
+  editAvatarBtn: {
+    position: 'absolute',
+    bottom: 4,
+    right: 4,
+    backgroundColor: colors.tertiary,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...shadows.md,
+    borderWidth: 3,
+    borderColor: colors.surface,
+  },
+  displayName: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 32,
+    color: colors.onSurface,
+    letterSpacing: -0.5,
+  },
+  memberLabel: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+    color: colors.onSurfaceVariant,
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  bioWrap: { maxWidth: 300, paddingHorizontal: 16 },
+  bioText: {
+    fontFamily: fonts.headlineItalic,
+    fontStyle: 'italic',
+    fontSize: 16,
+    color: colors.onSurface,
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  bioPlaceholder: {
+    fontFamily: fonts.headlineItalic,
+    fontStyle: 'italic',
+    fontSize: 16,
+    color: colors.onSurfaceVariant + '80',
+    textAlign: 'center',
+  },
+  bioEditWrap: { width: '100%', marginTop: 8 },
   bioInput: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 15,
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: 12,
+    padding: 14,
+    fontFamily: fonts.body,
+    fontSize: 14,
+    color: colors.onSurface,
     minHeight: 60,
     textAlignVertical: 'top',
   },
-  bioText: { fontSize: 15, color: '#333' },
-  bioPlaceholder: { fontSize: 15, color: '#999', fontStyle: 'italic' },
-  saveBtn: {
-    backgroundColor: '#6366f1',
-    borderRadius: 8,
-    padding: 10,
+  saveBioBtn: {
+    backgroundColor: colors.primaryContainer,
+    borderRadius: 10,
+    paddingVertical: 10,
     marginTop: 10,
     alignItems: 'center',
   },
-  saveBtnText: { color: '#fff', fontWeight: '600' },
-  logoutBtn: {
-    marginTop: 40,
-    marginHorizontal: 24,
-    padding: 14,
-    borderRadius: 10,
-    backgroundColor: '#fef2f2',
+  saveBioBtnText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.onPrimary,
+  },
+
+  // Stats
+  statsGrid: {
+    flexDirection: 'row',
+    paddingHorizontal: 24,
+    gap: 10,
+    marginBottom: 32,
+  },
+  statCard: {
+    flex: 1,
+    borderRadius: 9999,
+    paddingVertical: 16,
     alignItems: 'center',
   },
-  logoutText: { color: '#ef4444', fontSize: 15, fontWeight: '600' },
+  statNumber: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 28,
+    color: colors.onSurface,
+  },
+  statLabel: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 9,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1.2,
+    color: colors.onSurfaceVariant,
+    marginTop: 2,
+  },
+
+  // Menu
+  menuSection: {
+    paddingHorizontal: 24,
+    gap: 6,
+    marginBottom: 32,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: 16,
+    padding: 18,
+    gap: 14,
+  },
+  menuRowText: {
+    flex: 1,
+    fontFamily: fonts.bodySemiBold,
+    fontSize: 15,
+    color: colors.onSurface,
+  },
+
+  // Logout
+  logoutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 28,
+    borderRadius: 9999,
+    borderWidth: 2,
+    borderColor: colors.error + '1a',
+  },
+  logoutText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.error,
+  },
 });

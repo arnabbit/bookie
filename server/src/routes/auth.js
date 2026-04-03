@@ -116,6 +116,62 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// POST /api/auth/enter — auto-registration: login if exists, register if not
+router.post('/enter', async (req, res) => {
+  try {
+    const { username, password, captchaId, captchaAnswer } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    // Validate captcha
+    const correctAnswer = captchaAnswers.get(captchaId);
+    if (correctAnswer == null || parseInt(captchaAnswer) !== correctAnswer) {
+      return res.status(400).json({ error: 'Invalid captcha' });
+    }
+    captchaAnswers.delete(captchaId);
+
+    const existing = await User.findOne({ username: username.toLowerCase() });
+    if (existing) {
+      const isMatch = await existing.comparePassword(password);
+      if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
+      existing.lastSeen = new Date();
+      await existing.save();
+      return res.json({
+        token: generateToken(existing),
+        user: { id: existing._id, username: existing.username, email: existing.email },
+      });
+    }
+
+    // New user — auto-register
+    if (username.length < 3 || username.length > 20) {
+      return res.status(400).json({ error: 'Username must be 3-20 characters' });
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      return res.status(400).json({ error: 'Letters, numbers, underscores only' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+
+    const user = await User.create({
+      username: username.toLowerCase(),
+      email: `${username.toLowerCase()}@booksocial.local`,
+      password,
+    });
+    res.status(201).json({
+      token: generateToken(user),
+      user: { id: user._id, username: user.username, email: user.email },
+      isNew: true,
+    });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ error: 'Username already taken' });
+    }
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // GET /api/auth/me
 router.get('/me', authMiddleware, async (req, res) => {
   try {

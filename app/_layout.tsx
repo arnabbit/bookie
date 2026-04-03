@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DefaultTheme, ThemeProvider, Theme } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -9,6 +9,18 @@ import { Platform } from 'react-native';
 import 'react-native-reanimated';
 
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+
+const AtelierTheme: Theme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: '#fcf9f4',
+    card: '#fcf9f4',
+    text: '#1c1c19',
+    border: 'rgba(196,198,204,0.15)',
+    primary: '#705d00',
+  },
+};
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -43,6 +55,15 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 export default function RootLayout() {
   const [loaded] = useFonts({
     ...Ionicons.font,
+    'NotoSerif-Regular': require('../assets/fonts/NotoSerif-Regular.ttf'),
+    'NotoSerif-Bold': require('../assets/fonts/NotoSerif-Bold.ttf'),
+    'NotoSerif-Italic': require('../assets/fonts/NotoSerif-Italic.ttf'),
+    'NotoSerif-BoldItalic': require('../assets/fonts/NotoSerif-BoldItalic.ttf'),
+    'Manrope-Regular': require('../assets/fonts/Manrope-Regular.ttf'),
+    'Manrope-Medium': require('../assets/fonts/Manrope-Medium.ttf'),
+    'Manrope-SemiBold': require('../assets/fonts/Manrope-SemiBold.ttf'),
+    'Manrope-Bold': require('../assets/fonts/Manrope-Bold.ttf'),
+    'Manrope-ExtraBold': require('../assets/fonts/Manrope-ExtraBold.ttf'),
   });
   const [fontReady, setFontReady] = useState(Platform.OS !== 'web');
 
@@ -63,7 +84,7 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider value={DefaultTheme}>
+    <ThemeProvider value={AtelierTheme}>
       <AuthProvider>
         <AuthGuard>
           <Stack>

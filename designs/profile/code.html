@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Profile - Booksocial</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,700;1,400;1,700&amp;family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "inverse-primary": "#bbc6e2",
+                    "on-error": "#ffffff",
+                    "surface-tint": "#545e76",
+                    "primary-container": "#101b30",
+                    "surface-variant": "#e5e2dd",
+                    "outline-variant": "#c4c6cc",
+                    "on-surface": "#1c1c19",
+                    "surface": "#fcf9f4",
+                    "on-primary": "#ffffff",
+                    "secondary-fixed": "#f7dfbb",
+                    "secondary": "#6d5c40",
+                    "primary-fixed-dim": "#bbc6e2",
+                    "on-tertiary": "#ffffff",
+                    "surface-bright": "#fcf9f4",
+                    "inverse-surface": "#31302d",
+                    "on-primary-container": "#79849d",
+                    "secondary-fixed-dim": "#dac3a1",
+                    "inverse-on-surface": "#f3f0eb",
+                    "on-secondary": "#ffffff",
+                    "surface-container-high": "#ebe8e3",
+                    "secondary-container": "#f4dcb8",
+                    "tertiary-container": "#c9a900",
+                    "error": "#ba1a1a",
+                    "error-container": "#ffdad6",
+                    "tertiary-fixed": "#ffe16d",
+                    "tertiary": "#705d00",
+                    "on-secondary-fixed": "#251a04",
+                    "outline": "#74777d",
+                    "surface-container": "#f0ede8",
+                    "on-background": "#1c1c19",
+                    "surface-container-highest": "#e5e2dd",
+                    "on-tertiary-fixed": "#221b00",
+                    "on-secondary-container": "#716043",
+                    "background": "#fcf9f4",
+                    "surface-container-low": "#f6f3ee",
+                    "on-error-container": "#93000a",
+                    "surface-dim": "#dcdad5",
+                    "on-tertiary-fixed-variant": "#544600",
+                    "primary-fixed": "#d7e2ff",
+                    "on-primary-fixed-variant": "#3c475d",
+                    "surface-container-lowest": "#ffffff",
+                    "tertiary-fixed-dim": "#e9c400",
+                    "on-primary-fixed": "#101b30",
+                    "on-secondary-fixed-variant": "#54442a",
+                    "on-surface-variant": "#44474c",
+                    "primary": "#000000",
+                    "on-tertiary-container": "#4c3e00"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "fontFamily": {
+                    "headline": ["Noto Serif"],
+                    "body": ["Manrope"],
+                    "label": ["Manrope"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        .serif-italic { font-family: 'Noto Serif', serif; font-style: italic; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface font-body selection:bg-tertiary-fixed selection:text-on-tertiary-fixed-variant">
+<!-- TopAppBar -->
+<header class="bg-[#fcf9f4] dark:bg-slate-950 flex justify-between items-center w-full px-6 py-4 docked full-width top-0 sticky z-50">
+<div class="flex items-center gap-4">
+<button class="text-[#0D1B2A] dark:text-slate-100 hover:opacity-80 transition-opacity active:scale-95 duration-150">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+<h1 class="font-noto-serif text-xl font-bold italic text-[#0D1B2A] dark:text-white">Booksocial</h1>
+</div>
+<div class="flex items-center gap-4">
+<div class="w-10 h-10 rounded-full overflow-hidden border-2 border-surface-container-highest">
+<img alt="User profile avatar" class="w-full h-full object-cover" data-alt="Close-up portrait of a thoughtful man with a short beard in a library setting, soft warm academic lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCdnUi_T2rTXchA3wBvRR5BJFXB7VdViXG9nwjMGOyJ9dwgdJIUoGEqVVNba1qRraMIbOoC4No1ikj-jIDPH9e35h5TPtfn7bUc7FCaSfsvQvThCcz2NXbXTGp-4Qm04TiX0zs4zFgF_XsTejXzTD1iuNH2Atvt0ZEzC8oHhTsg0Gnjgmcg2jq35Yskmw67rZLhgXfe4TL88JSylI6qYa1JdppVVfTTketZhbjE6712bIcwVl48jcztgaMdI2JK1LTX9Jfi16L1-mon"/>
+</div>
+</div>
+</header>
+<main class="max-w-4xl mx-auto px-6 py-8 pb-32">
+<!-- Profile Header Section -->
+<section class="flex flex-col items-center mb-12 relative">
+<div class="relative mb-6">
+<div class="w-40 h-40 rounded-full overflow-hidden ring-8 ring-surface-container-low shadow-sm">
+<img alt="The Archivist" class="w-full h-full object-cover" data-alt="Professional portrait of a curator in a classic study, wearing a dark turtleneck, warm cinematic lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAvShD0S_4_DXftu2YneUgivQnonC1JYRkVqhmrtQWWjQdOFU3bBmpw7Ep_8hSq0GLOdpOiYX-fmUAeQP7pE2a4R0I6sFdhcRyJKjwMX1RXMLaTV6wWwGcWn2yiQr4fmnl0Kh1Q2jLHE9mSt9mpyAPLcxqat7LjYkpe0-YaOEFg-UpC4vi37VM25Ri5XTGhGy6RMlsIVETni_NJgeiexRx-TjuLJInMrez1ZWOcoWQ-ZpqatZAZnA5wi9psXTy_0qk6STQhpnsCt-W4"/>
+</div>
+<button class="absolute bottom-1 right-1 bg-tertiary text-white p-3 rounded-full shadow-lg hover:scale-105 transition-transform active:scale-95">
+<span class="material-symbols-outlined text-lg" data-icon="edit">edit</span>
+</button>
+</div>
+<div class="text-center">
+<h2 class="font-headline text-4xl font-bold text-on-surface mb-2 tracking-tight">The Archivist</h2>
+<p class="text-on-surface-variant font-medium tracking-wide uppercase text-xs mb-4">Premium Member • Joined Oct 2023</p>
+<div class="max-w-md mx-auto">
+<p class="text-on-surface text-lg leading-relaxed serif-italic px-4">
+                        "Curating a lifetime of forgotten thoughts, one spine at a time. Currently obsessed with 19th-century epistolary novels and cold brew."
+                    </p>
+</div>
+</div>
+</section>
+<!-- Stats Grid (Bento Style) -->
+<section class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-12">
+<div class="bg-surface-container-low p-6 rounded-full flex flex-col items-center justify-center border-none">
+<span class="font-headline text-3xl font-bold text-tertiary">12</span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mt-1">Books This Year</span>
+</div>
+<div class="bg-surface-container-highest p-6 rounded-full flex flex-col items-center justify-center border-none">
+<span class="font-headline text-3xl font-bold text-on-surface">342</span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mt-1">Annotations</span>
+</div>
+<div class="bg-surface-container-low p-6 rounded-full flex flex-col items-center justify-center border-none">
+<span class="font-headline text-3xl font-bold text-on-surface">4</span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mt-1">Active Clubs</span>
+</div>
+</section>
+<!-- Recent Reads Section -->
+<section class="mb-12">
+<div class="flex justify-between items-end mb-6 px-2">
+<h3 class="font-headline text-2xl font-bold text-on-surface">Recent Reads</h3>
+<button class="text-tertiary font-bold text-sm hover:underline">View Library</button>
+</div>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+<!-- Book Card 1 -->
+<div class="group relative">
+<div class="aspect-[2/3] rounded-xl overflow-hidden shadow-sm bg-surface-container-highest transition-transform duration-300 group-hover:-translate-y-2 group-hover:rotate-1">
+<img alt="Book Cover" class="w-full h-full object-cover" data-alt="Minimalist book cover with abstract art in shades of blue and gold, premium paper texture" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB3dyvfLcY2d9hwXTR3qV6Fo2NGuHZ5QQkE1hEUlazezHZIGNs5b7i9hacPu8RZjqACyH_LTVXygF7u3ZgqLF4OOPD-ReW2WTVrmFp2I5jFS-nj8uuPZYXI-FQ23kp25wHnRuJdAffxS-_1MXGBGLFPpKMhneeNpf6vOOew_2SM5zxhmWdmIWpH3rX-yaleRbre3MRv7Y4bIJDLXW2pr10c_e1sH_cXDi3rGTGC7xCm2R7Ofj_-ZvKXnV6Un0yLbhv2CMtd8OJQt8Pn"/>
+</div>
+<div class="mt-4">
+<h4 class="font-headline text-sm font-bold truncate">The Silent Patient</h4>
+<p class="text-on-surface-variant text-xs">Alex Michaelides</p>
+</div>
+</div>
+<!-- Book Card 2 -->
+<div class="group relative">
+<div class="aspect-[2/3] rounded-xl overflow-hidden shadow-sm bg-surface-container-highest transition-transform duration-300 group-hover:-translate-y-2 group-hover:-rotate-1">
+<img alt="Book Cover" class="w-full h-full object-cover" data-alt="Vintage book cover with ornate typography and floral illustrations on aged cream paper" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBaZ2iS-EBg7CoHlm6fTRnvjaMimAlDEYczX6DLaBPEfosMGatb0O-nv_IIpDhakpRubSssyQZ5kaPjDCyPY5r9o_VWr7vTcPtCxP1VDNWYDBywap_n-UNJ1JVqJXrd78Ndx5mNQsg5MsjC1tZY4rsNOyxyFm7Eq2GtUvaMD4VRC0gaoGneOERUH2F9p_UJI2ht9ZVWQg0NFTs8Nmwt-MVVS44CL84i0y5W8Itp5N9XgxtCD65hRMZfiFCajWATvj3-KXi1eRYRKNNU"/>
+</div>
+<div class="mt-4">
+<h4 class="font-headline text-sm font-bold truncate">Classic Musings</h4>
+<p class="text-on-surface-variant text-xs">Elena Thorne</p>
+</div>
+</div>
+<!-- Book Card 3 -->
+<div class="group relative">
+<div class="aspect-[2/3] rounded-xl overflow-hidden shadow-sm bg-surface-container-highest transition-transform duration-300 group-hover:-translate-y-2 group-hover:rotate-1">
+<img alt="Book Cover" class="w-full h-full object-cover" data-alt="Modern book cover with bold black lettering on a vivid orange background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCnzv0Tj2ZSADXksxB5lJPCIEZFWvXKUE-dN6_kfvPgZhvzBxPP2nuxoAD1kTK8jUPoiX0dtE5Ucn1RMKgVApAYL12RscBnmzJnxIhNhP7Oq4i-z-U_zPfYQRj6buhZSkjdhmou5pNOM8MhJ-b3ymGspHyKti6b39fKieJxmtvT8DzdAqAw9DVAdZBowUVuvlXWbiQEVQyLnlMNUfnGN6kGRuZS9xAxoK8pCeDf56KYMymkrP2t1EOOUxDEqkrWQbOL0ESBs8SkzkYw"/>
+</div>
+<div class="mt-4">
+<h4 class="font-headline text-sm font-bold truncate">The Goldfinch</h4>
+<p class="text-on-surface-variant text-xs">Donna Tartt</p>
+</div>
+</div>
+<!-- Book Card 4 -->
+<div class="group relative">
+<div class="aspect-[2/3] rounded-xl overflow-hidden shadow-sm bg-surface-container-highest transition-transform duration-300 group-hover:-translate-y-2 group-hover:-rotate-1">
+<img alt="Book Cover" class="w-full h-full object-cover" data-alt="Deep blue book cover with a simple white line illustration of a mountain peak" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBeANrRV7pb3dm-wmTn1ZqFcQ1jn9-ub8GpHblXV2FwtcatoJjgSe0QXwOJ_7ktYgN7LuoByHjrDf8_j0tAs4lGoaw15hjbWPpV5XEq9NlNsKWFCC9ZyNYX-v1rEwi8Z1U5yQ9h2zl1Na1Y3H-95tc6rNTUDAmRNdTmCDEbUPHvQaDHPl6vFnpB9qyW5iO13KQ7BN0w2id5bWtHuhpjEEOBTrhl974hv46PhXtGoeHQWBDUYey0M2VqL461PnybadDNldlfrrHMk5S2"/>
+</div>
+<div class="mt-4">
+<h4 class="font-headline text-sm font-bold truncate">Elevation</h4>
+<p class="text-on-surface-variant text-xs">Stephen King</p>
+</div>
+</div>
+</div>
+</section>
+<!-- Menu/Settings List -->
+<section class="space-y-2">
+<a class="flex items-center justify-between p-5 bg-surface-container-low rounded-2xl hover:bg-surface-container-high transition-colors group" href="#">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-tertiary" data-icon="settings">settings</span>
+<span class="font-semibold text-on-surface">Account Settings</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant group-hover:translate-x-1 transition-transform" data-icon="chevron_right">chevron_right</span>
+</a>
+<a class="flex items-center justify-between p-5 bg-surface-container-low rounded-2xl hover:bg-surface-container-high transition-colors group" href="#">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-tertiary" data-icon="bookmark">bookmark</span>
+<span class="font-semibold text-on-surface">Reading Goals &amp; Wishlist</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant group-hover:translate-x-1 transition-transform" data-icon="chevron_right">chevron_right</span>
+</a>
+<a class="flex items-center justify-between p-5 bg-surface-container-low rounded-2xl hover:bg-surface-container-high transition-colors group" href="#">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-tertiary" data-icon="help">help</span>
+<span class="font-semibold text-on-surface">Help &amp; Support</span>
+</div>
+<span class="material-symbols-outlined text-outline-variant group-hover:translate-x-1 transition-transform" data-icon="chevron_right">chevron_right</span>
+</a>
+</section>
+<!-- Logout Action -->
+<section class="mt-12 pt-6 flex justify-center">
+<button class="flex items-center gap-2 px-8 py-4 bg-transparent text-error border-2 border-error/10 hover:bg-error/5 rounded-full font-bold transition-all active:scale-95">
+<span class="material-symbols-outlined" data-icon="logout">logout</span>
+                Logout from Booksocial
+            </button>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-6 pt-3 bg-[#fcf9f4]/80 dark:bg-slate-900/80 backdrop-blur-md shadow-[0_-4px_24px_rgba(28,28,25,0.06)] border-t border-[#c4c6cc]/15">
+<a class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 px-3 py-1 transition-all duration-300 ease-out hover:text-[#705d00]" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="auto_stories">auto_stories</span>
+<span class="font-manrope text-[10px] font-semibold uppercase tracking-widest">Library</span>
+</a>
+<a class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 px-3 py-1 transition-all duration-300 ease-out hover:text-[#705d00]" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="group">group</span>
+<span class="font-manrope text-[10px] font-semibold uppercase tracking-widest">Social</span>
+</a>
+<a class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 px-3 py-1 transition-all duration-300 ease-out hover:text-[#705d00]" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="chat_bubble">chat_bubble</span>
+<span class="font-manrope text-[10px] font-semibold uppercase tracking-widest">Messages</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#0D1B2A] dark:text-white bg-[#e5e2dd] dark:bg-slate-800 rounded-xl px-3 py-1 transition-all duration-300 ease-out" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="person">person</span>
+<span class="font-manrope text-[10px] font-semibold uppercase tracking-widest">Profile</span>
+</a>
+</nav>
+</body></html>

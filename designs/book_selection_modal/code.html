@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>BookSocial - Book Detail Modal</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,700;1,400;1,700&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "secondary-fixed-dim": "#dac3a1",
+                        "outline-variant": "#c4c6cc",
+                        "on-tertiary-fixed": "#221b00",
+                        "on-secondary-fixed": "#251a04",
+                        "surface-bright": "#fcf9f4",
+                        "surface": "#fcf9f4",
+                        "on-primary-fixed": "#101b30",
+                        "error-container": "#ffdad6",
+                        "inverse-surface": "#31302d",
+                        "surface-container-high": "#ebe8e3",
+                        "on-primary-fixed-variant": "#3c475d",
+                        "tertiary-fixed-dim": "#e9c400",
+                        "surface-variant": "#e5e2dd",
+                        "tertiary-fixed": "#ffe16d",
+                        "on-secondary": "#ffffff",
+                        "surface-dim": "#dcdad5",
+                        "primary-fixed": "#d7e2ff",
+                        "tertiary": "#705d00",
+                        "on-surface-variant": "#44474c",
+                        "primary-container": "#101b30",
+                        "error": "#ba1a1a",
+                        "inverse-on-surface": "#f3f0eb",
+                        "on-tertiary": "#ffffff",
+                        "on-surface": "#1c1c19",
+                        "surface-container": "#f0ede8",
+                        "on-primary-container": "#79849d",
+                        "surface-container-highest": "#e5e2dd",
+                        "surface-tint": "#545e76",
+                        "secondary-fixed": "#f7dfbb",
+                        "on-error-container": "#93000a",
+                        "background": "#fcf9f4",
+                        "on-secondary-container": "#716043",
+                        "secondary": "#6d5c40",
+                        "primary": "#000000",
+                        "on-primary": "#ffffff",
+                        "inverse-primary": "#bbc6e2",
+                        "surface-container-low": "#f6f3ee",
+                        "on-secondary-fixed-variant": "#54442a",
+                        "on-background": "#1c1c19",
+                        "tertiary-container": "#c9a900",
+                        "on-tertiary-container": "#4c3e00",
+                        "primary-fixed-dim": "#bbc6e2",
+                        "on-error": "#ffffff",
+                        "surface-container-lowest": "#ffffff",
+                        "on-tertiary-fixed-variant": "#544600",
+                        "outline": "#74777d",
+                        "secondary-container": "#f4dcb8"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "headline": ["Noto Serif"],
+                        "body": ["Manrope"],
+                        "label": ["Manrope"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .serif-italic { font-family: 'Noto Serif'; font-style: italic; }
+        .glass-panel {
+            background: rgba(252, 249, 244, 0.8);
+            backdrop-filter: blur(12px);
+        }
+        body { font-family: 'Manrope', sans-serif; background-color: #fcf9f4; color: #1c1c19; }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface">
+<!-- Header Navigation (Shared Component TopAppBar) -->
+<header class="fixed top-0 w-full z-50 bg-[#fcf9f4]/80 dark:bg-slate-950/80 backdrop-blur-xl shadow-sm dark:shadow-none flex justify-between items-center px-6 py-4">
+<div class="flex items-center gap-4">
+<button class="hover:bg-[#f6f3ee] dark:hover:bg-slate-900 transition-colors p-2 rounded-full active:scale-95 duration-200 transition-transform">
+<span class="material-symbols-outlined text-[#0D1B2A] dark:text-slate-100">menu</span>
+</button>
+<h1 class="font-serif text-2xl font-bold italic tracking-tight text-[#0D1B2A] dark:text-slate-100">The Digital Atelier</h1>
+</div>
+<div class="w-10 h-10 rounded-full bg-surface-container-highest overflow-hidden">
+<img alt="User profile avatar" class="w-full h-full object-cover" data-alt="Professional headshot of a person with a warm smile, natural lighting, blurred office background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB3SHAnXoECz4OkNK3nzkVijqYl3vcPAzKZJCSqy0LnR8YX5XR_uQUSZfOal2TCAElvT5ROk3ZOwDeXHu0BxM0CMI4TDd6wwiY3rfaW_1lMKVb_N0lGSB8S5q4FuAPfx-WbFZrWNKKb4-PZ_QNCzC2eosi_0g6vWsqSjEC0Ok4NEyTVBGISZQiZBEO0DmlrQotNqCakDXy6h6seANcKCkwVIr_95LeN_0AoNsq7StK5fM906DFNSEh0CIvWQZs8whjIVbz8SRJDePCc"/>
+</div>
+</header>
+<!-- Modal Overlay -->
+<main class="min-h-screen pt-24 pb-32 px-4 md:px-8 flex justify-center items-center bg-surface-container-low">
+<!-- Book Detail Modal Container -->
+<div class="max-w-5xl w-full bg-surface-container-lowest rounded-3xl overflow-hidden shadow-[0_24px_48px_-12px_rgba(28,28,25,0.08)] relative grid grid-cols-1 md:grid-cols-12 gap-0 border border-[#c4c6cc]/10">
+<!-- Left Column: Visual & Metadata -->
+<div class="md:col-span-5 bg-surface-container p-8 md:p-12 flex flex-col items-center justify-start gap-8 relative overflow-hidden">
+<!-- Asymmetric Halo Behind Cover -->
+<div class="absolute top-1/4 -left-12 w-64 h-64 bg-secondary-container opacity-40 blur-[80px] rounded-full"></div>
+<!-- Large Book Cover -->
+<div class="relative z-10 w-full max-w-[280px] aspect-[2/3] transform -rotate-1 shadow-[12px_16px_32px_rgba(0,0,0,0.15)] rounded-r-sm overflow-hidden">
+<img alt="The Architecture of Solitude" class="w-full h-full object-cover" data-alt="Modern book cover with minimalist typography and abstract architectural shapes in earth tones" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDpBnvKrWteQPY7xmALc3NA7-DD6pYKLMqfXm64RPhECrcanmydT5GBViQ06rJn1OIz8N-CEYIqGZ_an31yleivQ2JYdW_q9Q5rmGKiv3vIWJ9FP3JFtR1iMQ3sFlq151sYFKKnE_CjjIekv8cDOFU-TTHep1lbdffKAR2_bxlnv77KzBixmIXvoK_2HIiPnBxTyL44VprPgzmRGsgxvmcTIsk_keF2uBH-wIPtoziZDVPSzTiCLEUzIdVM9fYJPq2-lKJHLcXvoZrq"/>
+</div>
+<!-- Author & Genre Tags -->
+<div class="z-10 text-center space-y-4">
+<div class="space-y-1">
+<p class="text-sm font-label uppercase tracking-widest text-on-surface-variant font-medium">Authored By</p>
+<p class="font-headline text-xl text-on-surface font-bold">Elias Thorne</p>
+</div>
+<div class="flex flex-wrap justify-center gap-2">
+<span class="bg-secondary-fixed-dim text-on-secondary-fixed px-4 py-1.5 rounded-full text-xs font-bold tracking-wide">Philosophy</span>
+<span class="bg-surface-container-high text-on-surface-variant px-4 py-1.5 rounded-full text-xs font-bold tracking-wide">Architecture</span>
+</div>
+</div>
+</div>
+<!-- Right Column: Content & Controls -->
+<div class="md:col-span-7 p-8 md:p-12 flex flex-col justify-between bg-surface-container-lowest">
+<div>
+<!-- Close Button (Absolute positioned within the relative right col) -->
+<button class="absolute top-6 right-6 p-2 rounded-full hover:bg-surface-container-high transition-colors text-on-surface-variant">
+<span class="material-symbols-outlined">close</span>
+</button>
+<!-- Title & Blurb -->
+<h2 class="font-headline text-4xl md:text-5xl font-bold text-on-surface leading-tight mb-6">The Architecture of Solitude</h2>
+<div class="space-y-6 mb-10">
+<h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface-variant font-bold">Synopsis</h3>
+<p class="font-headline text-lg leading-relaxed text-on-surface/90 italic">
+                            "A profound meditation on the spaces we inhabit and the silence we cultivate. Thorne explores how physical structure influences spiritual clarity in an increasingly noisy world."
+                        </p>
+<p class="font-body text-base leading-relaxed text-on-surface-variant">
+                            Beyond the blueprints and the mortar, Thorne delves into the psychological resonance of quiet rooms. This work serves as both a historical retrospective and a modern manifesto for intentional living.
+                        </p>
+</div>
+<!-- Format Picker -->
+<div class="space-y-4 mb-12">
+<h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface-variant font-bold">Select Reading Experience</h3>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+<!-- Option 1: Essentials -->
+<button class="group p-4 rounded-xl border border-outline-variant/20 hover:border-tertiary transition-all text-left bg-surface-container-low hover:bg-surface-container-lowest">
+<p class="text-sm font-bold text-on-surface mb-1">Essentials</p>
+<div class="flex items-center text-[10px] font-label font-bold text-tertiary uppercase tracking-wider">
+<span class="material-symbols-outlined text-xs mr-1">schedule</span>
+                                    5 MIN READ
+                                </div>
+</button>
+<!-- Option 2: Abridged (Active State) -->
+<button class="p-4 rounded-xl border-2 border-tertiary transition-all text-left bg-surface-container-lowest shadow-sm ring-1 ring-tertiary/20">
+<div class="flex justify-between items-start">
+<p class="text-sm font-bold text-on-surface mb-1">Abridged</p>
+<span class="material-symbols-outlined text-tertiary text-lg" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+</div>
+<div class="flex items-center text-[10px] font-label font-bold text-tertiary uppercase tracking-wider">
+<span class="material-symbols-outlined text-xs mr-1">schedule</span>
+                                    15 MIN READ
+                                </div>
+</button>
+<!-- Option 3: Full -->
+<button class="group p-4 rounded-xl border border-outline-variant/20 hover:border-tertiary transition-all text-left bg-surface-container-low hover:bg-surface-container-lowest">
+<p class="text-sm font-bold text-on-surface mb-1">Full</p>
+<div class="flex items-center text-[10px] font-label font-bold text-on-surface-variant uppercase tracking-wider">
+<span class="material-symbols-outlined text-xs mr-1">book</span>
+                                    COMPLETE
+                                </div>
+</button>
+</div>
+</div>
+</div>
+<!-- Primary Action -->
+<div class="flex flex-col sm:flex-row items-center gap-4 border-t border-outline-variant/10 pt-8">
+<button class="w-full sm:flex-1 bg-primary text-on-primary py-4 px-8 rounded-xl font-bold tracking-wide flex items-center justify-center gap-3 hover:shadow-xl active:scale-95 transition-all bg-gradient-to-br from-primary to-primary-container">
+<span class="material-symbols-outlined">library_add</span>
+                        Add to My Books
+                    </button>
+<button class="w-full sm:w-auto p-4 rounded-xl bg-surface-container-high text-on-surface-variant hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined">share</span>
+</button>
+</div>
+</div>
+</div>
+</main>
+<!-- Bottom Navigation (Shared Component BottomNavBar) -->
+<nav class="fixed bottom-0 left-0 w-full flex justify-around items-center px-4 pb-6 pt-3 bg-[#fcf9f4]/80 dark:bg-slate-950/80 backdrop-blur-xl border-t border-[#c4c6cc]/15 shadow-[0_-4px_24px_0_rgba(28,28,25,0.06)] z-50 rounded-t-3xl md:hidden">
+<a class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 px-5 py-2 hover:text-[#0D1B2A] dark:hover:text-white active:scale-90 transition-all duration-300" href="#">
+<span class="material-symbols-outlined mb-1">auto_stories</span>
+<span class="font-sans text-[11px] uppercase tracking-widest font-medium">Library</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-[#e5e2dd] dark:bg-slate-800 text-[#0D1B2A] dark:text-white rounded-full px-5 py-2 active:scale-90 transition-all duration-300" href="#">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 1;">explore</span>
+<span class="font-sans text-[11px] uppercase tracking-widest font-medium">Discover</span>
+</a>
+<a class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 px-5 py-2 hover:text-[#0D1B2A] dark:hover:text-white active:scale-90 transition-all duration-300" href="#">
+<span class="material-symbols-outlined mb-1">analytics</span>
+<span class="font-sans text-[11px] uppercase tracking-widest font-medium">Insights</span>
+</a>
+<a class="flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 px-5 py-2 hover:text-[#0D1B2A] dark:hover:text-white active:scale-90 transition-all duration-300" href="#">
+<span class="material-symbols-outlined mb-1">inventory_2</span>
+<span class="font-sans text-[11px] uppercase tracking-widest font-medium">Archive</span>
+</a>
+</nav>
+<!-- Floating Action Button suppressed on Detail screen as per instructions -->
+</body></html>
