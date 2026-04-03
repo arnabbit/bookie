@@ -20,7 +20,7 @@ const server = http.createServer(app);
 
 // CORS
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:8081',
+  origin: true,
   credentials: true,
 }));
 app.use(express.json());
