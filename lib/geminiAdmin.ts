@@ -2,7 +2,7 @@ import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
 
 const GEMINI_ENDPOINT =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
 
 export interface GeneratedPage {
   pageNumber: number;
@@ -25,7 +25,7 @@ Analyze this PDF book and produce a JSON response with:
 1. Extract title and author.
 2. Write a one-paragraph summary of the entire book (100-150 words).
 3. Produce EXACTLY enough pages to represent ~10% of the book's total page count. For a 200-page book, that's ~20 pages. For a 50-page book, ~5 pages.
-4. Each page: 30-50 words. Capture ONLY the core idea, turning point, or thesis of that section. Skip supporting arguments, examples, anecdotes — keep only what's load-bearing.
+4. Each page: 60-80 words. Capture ONLY the core idea, turning point, or thesis of that section. Skip supporting arguments, examples, anecdotes — keep only what's load-bearing.
 5. Write in the author's voice. Every page should feel like a perfectly chosen excerpt.
 6. Each page must stand alone as a complete thought, yet flow naturally into the next.
 7. End each page on tension or an unresolved idea — make the reader need the next page.
@@ -36,7 +36,7 @@ Respond with ONLY valid JSON:
   "author": "string",
   "summary": "string — 100-150 word book summary",
   "pages": [
-    { "pageNumber": 1, "content": "string — 30-50 words" }
+    { "pageNumber": 1, "content": "string — 60-80 words" }
   ]
 }`,
 
@@ -46,7 +46,7 @@ Analyze this PDF book and produce a JSON response with:
 1. Extract title and author.
 2. Write a one-paragraph summary of the entire book (100-150 words).
 3. Produce EXACTLY enough pages to represent ~30% of the book's total page count. For a 200-page book, that's ~60 pages. For a 50-page book, ~15 pages.
-4. Each page: 40-70 words. Preserve the narrative flow — arguments should build, characters should develop, ideas should layer.
+4. Each page: 60-80 words. Preserve the narrative flow — arguments should build, characters should develop, ideas should layer.
 5. Include key examples, pivotal moments, and supporting reasoning that the Essentials version would skip.
 6. Write in the author's authentic voice and style — never flatten into generic prose.
 7. Be vivid and sensory. Open each page with something that grabs attention.
@@ -59,7 +59,7 @@ Respond with ONLY valid JSON:
   "author": "string",
   "summary": "string — 100-150 word book summary",
   "pages": [
-    { "pageNumber": 1, "content": "string — 40-70 words" }
+    { "pageNumber": 1, "content": "string — 60-80 words" }
   ]
 }`,
 
@@ -69,7 +69,7 @@ Analyze this PDF book and produce a JSON response with:
 1. Extract title and author.
 2. Write a one-paragraph summary of the entire book (100-150 words).
 3. Produce ONE output page for EVERY page in the original PDF. If the book has 200 pages, produce 200 output pages.
-4. Each page: 30-50 words. Narratively retell that page's content in the author's style.
+4. Each page: 60-80 words. Narratively retell that page's content in the author's style.
 5. Preserve ALL content — every argument, example, character moment, subplot. Nothing is cut.
 6. Write in the author's authentic voice. Be vivid, sensory, emotionally resonant.
 7. Each page must be self-contained and readable on its own, yet leave the reader hungry for more.
@@ -82,7 +82,7 @@ Respond with ONLY valid JSON:
   "author": "string",
   "summary": "string — 100-150 word book summary",
   "pages": [
-    { "pageNumber": 1, "content": "string — 30-50 words" }
+    { "pageNumber": 1, "content": "string — 60-80 words" }
   ]
 }`,
 };
