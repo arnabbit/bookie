@@ -12,7 +12,7 @@ import {
   Dimensions,
   TextInput,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { API_URL, useAuth } from '@/lib/AuthContext';
@@ -87,6 +87,11 @@ export default function BooksScreen() {
       setLoading(false);
     })();
   }, [fetchCatalogue, fetchMyBooks]);
+
+  // Refetch my books on screen focus (updates progress bars)
+  useFocusEffect(useCallback(() => {
+    if (!loading) fetchMyBooks();
+  }, [fetchMyBooks, loading]));
 
   // Deep-link: open catalogue modal for a specific book+format
   useEffect(() => {
