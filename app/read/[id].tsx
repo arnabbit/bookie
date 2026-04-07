@@ -265,6 +265,8 @@ export default function BookReaderScreen() {
             renderItem={renderItem}
             keyExtractor={(_, i) => i.toString()}
             pagingEnabled
+            bounces={false}
+            overScrollMode="never"
             showsVerticalScrollIndicator={false}
             onViewableItemsChanged={onViewableItemsChanged}
             viewabilityConfig={viewabilityConfig}
