@@ -1,6 +1,4 @@
-import * as FileSystem from 'expo-file-system';
-import { Platform } from 'react-native';
-import { PDFDocument } from 'pdf-lib';
+import { ocrPdf } from './openrouter';
 
 const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
@@ -23,63 +21,24 @@ export interface GenerationResult {
 
 type FormatType = 'mini' | 'pro' | 'ultra';
 
-// ---------- PDF helpers ----------
+// ---------- OCR page parser ----------
 
-async function readPdfAsBase64(fileUri: string): Promise<string> {
-  if (Platform.OS === 'web') {
-    const res = await fetch(fileUri);
-    const blob = await res.blob();
-    return new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const dataUrl = reader.result as string;
-        resolve(dataUrl.split(',')[1]);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
+interface OcrPage {
+  pageNum: number;
+  text: string;
+}
+
+function parseOcrPages(ocrText: string): OcrPage[] {
+  const pages: OcrPage[] = [];
+  const regex = /Page\s+(\d+)\s+start([\s\S]*?)Page\s+\1\s+end/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(ocrText)) !== null) {
+    pages.push({ pageNum: parseInt(match[1], 10), text: match[2].trim() });
   }
-  return await FileSystem.readAsStringAsync(fileUri, {
-    encoding: 'base64' as const,
-  });
+  return pages;
 }
 
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-async function getPageCount(base64: string): Promise<number> {
-  const pdf = await PDFDocument.load(base64ToBytes(base64), { ignoreEncryption: true });
-  return pdf.getPageCount();
-}
-
-/** Extract pages [startPage, endPage] (1-indexed inclusive) into a new PDF base64 */
-async function extractPdfPages(base64: string, startPage: number, endPage: number): Promise<string> {
-  const srcBytes = base64ToBytes(base64);
-  const srcDoc = await PDFDocument.load(srcBytes, { ignoreEncryption: true });
-  const newDoc = await PDFDocument.create();
-
-  // pdf-lib uses 0-indexed pages
-  const indices = [];
-  for (let i = startPage - 1; i < endPage; i++) indices.push(i);
-
-  const copiedPages = await newDoc.copyPages(srcDoc, indices);
-  for (const page of copiedPages) newDoc.addPage(page);
-
-  const newBytes = await newDoc.save();
-  return bytesToBase64(newBytes);
-}
-
-// ---------- Prompt helpers ----------
+// ---------- Helpers ----------
 
 function computeExpectedPages(format: FormatType, totalPages: number): number {
   if (format === 'mini') return Math.max(Math.round(totalPages * 0.1), 1);
@@ -90,6 +49,8 @@ function computeExpectedPages(format: FormatType, totalPages: number): number {
 function formatLabel(format: FormatType): string {
   return format === 'mini' ? 'Essentials' : format === 'pro' ? 'Abridged' : 'Full';
 }
+
+// ---------- Quality rules ----------
 
 const QUALITY_RULES_MINI = `- For each output page, condense that section into its core idea, turning point, or thesis. Skip supporting arguments, examples, anecdotes — keep only what's load-bearing.
 - Write in the author's voice. Every page should feel like a perfectly chosen excerpt.
@@ -115,12 +76,13 @@ function qualityRules(format: FormatType): string {
   return QUALITY_RULES_ULTRA;
 }
 
-/** Single-shot prompt for small outputs (<= BATCH_SIZE) — full PDF sent */
-function buildPrompt(format: FormatType, totalPages: number): string {
+// ---------- Prompt builders ----------
+
+function buildPrompt(format: FormatType, totalPages: number, bookText: string): string {
   const expected = computeExpectedPages(format, totalPages);
   const pagesPerOutput = Math.round(totalPages / expected);
 
-  return `You are a literary condensation engine. This PDF has ${totalPages} pages. You MUST produce EXACTLY ${expected} output pages.
+  return `You are a literary condensation engine. The following book has ${totalPages} pages. You MUST produce EXACTLY ${expected} output pages.
 
 CRITICAL — FULL COVERAGE: Divide all ${totalPages} pages evenly across your ${expected} output pages. Each output page covers roughly ${pagesPerOutput} consecutive original pages. Page 1 covers the beginning, page ${expected} covers the ending. The reader must experience the complete book from start to finish — no gaps, no skipped sections.
 
@@ -141,10 +103,12 @@ Respond with ONLY valid JSON:
   "pages": [
     { "pageNumber": 1, "content": "string — EXACTLY 60-80 words" }
   ]
-}`;
 }
 
-/** Batch prompt — receives a PDF chunk, not the full document */
+--- BOOK TEXT ---
+${bookText}`;
+}
+
 function buildBatchPrompt(
   format: FormatType,
   batchIndex: number,
@@ -156,13 +120,14 @@ function buildBatchPrompt(
   pdfStart: number,
   pdfEnd: number,
   totalPdfPages: number,
+  batchText: string,
 ): string {
   const isFirst = batchIndex === 0;
 
   const metaInstructions = isFirst
     ? `Instructions:
 1. Extract the book's title and author.
-2. Write a one-paragraph summary of the ENTIRE book (100-150 words) based on this excerpt and your knowledge of the full work.
+2. Write a one-paragraph summary of the ENTIRE book (100-150 words).
 3. Produce EXACTLY ${pagesInBatch} output pages numbered ${startPage} through ${endPage}.`
     : `Instructions:
 Produce EXACTLY ${pagesInBatch} output pages numbered ${startPage} through ${endPage}. Do NOT include title, author, or summary — only pages.`;
@@ -184,7 +149,7 @@ Produce EXACTLY ${pagesInBatch} output pages numbered ${startPage} through ${end
 
   return `You are a literary condensation engine. You are creating a ${totalOutputPages}-page condensed version of a ${totalPdfPages}-page book.
 
-This PDF excerpt contains pages ${pdfStart}-${pdfEnd} of the original book (batch ${batchIndex + 1} of ${totalBatches}). Generate EXACTLY ${pagesInBatch} output pages that cover ALL content in this excerpt. Every page of this excerpt must be represented — read it completely from start to finish.
+This text excerpt contains pages ${pdfStart}-${pdfEnd} of the original book (batch ${batchIndex + 1} of ${totalBatches}). Generate EXACTLY ${pagesInBatch} output pages that cover ALL content in this excerpt. Every page must be represented — read it completely from start to finish.
 
 STRICT WORD COUNT: Each page MUST be exactly 60-80 words. Not 40, not 100. Count carefully.
 
@@ -193,7 +158,10 @@ ${qualityRules(format)}
 ${metaInstructions}
 
 Respond with ONLY valid JSON:
-${jsonFormat}`;
+${jsonFormat}
+
+--- BOOK TEXT (pages ${pdfStart}-${pdfEnd}) ---
+${batchText}`;
 }
 
 // ---------- Retry helper ----------
@@ -214,25 +182,26 @@ async function callWithRetry(fn: () => Promise<string>): Promise<string> {
 
 // ---------- Batch orchestration ----------
 
-interface BatchCallFn {
-  (base64: string, prompt: string): Promise<string>;
+interface TextCallFn {
+  (prompt: string): Promise<string>;
 }
 
 async function generateInBatches(
-  base64: string,
-  totalPdfPages: number,
+  ocrPages: OcrPage[],
   format: FormatType,
-  callApi: BatchCallFn,
+  callApi: TextCallFn,
   onStatus?: (msg: string) => void,
 ): Promise<GenerationResult> {
+  const totalPdfPages = ocrPages.length;
   const expectedPages = computeExpectedPages(format, totalPdfPages);
 
-  // Small enough — single shot with full PDF
+  // Small enough — single shot
   if (expectedPages <= BATCH_SIZE) {
     const label = formatLabel(format);
     onStatus?.(`Generating ${expectedPages} ${label} pages...`);
-    const prompt = buildPrompt(format, totalPdfPages);
-    const raw = await callWithRetry(() => callApi(base64, prompt));
+    const bookText = ocrPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
+    const prompt = buildPrompt(format, totalPdfPages, bookText);
+    const raw = await callWithRetry(() => callApi(prompt));
     const parsed = JSON.parse(raw);
     if (!parsed.pages?.length) throw new Error('No pages returned');
 
@@ -247,15 +216,18 @@ async function generateInBatches(
     };
   }
 
-  // Batch mode — split PDF and send chunks
-  const batches: { startPage: number; endPage: number; count: number; pdfStart: number; pdfEnd: number }[] = [];
+  // Batch mode — split OCR text into chunks
+  const batches: { startPage: number; endPage: number; count: number; pdfStart: number; pdfEnd: number; text: string }[] = [];
   for (let i = 0; i < expectedPages; i += BATCH_SIZE) {
     const startPage = i + 1;
     const endPage = Math.min(i + BATCH_SIZE, expectedPages);
     const count = endPage - startPage + 1;
     const pdfStart = Math.floor((startPage - 1) / expectedPages * totalPdfPages) + 1;
     const pdfEnd = Math.min(Math.floor(endPage / expectedPages * totalPdfPages), totalPdfPages);
-    batches.push({ startPage, endPage, count, pdfStart, pdfEnd });
+
+    const chunkPages = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
+    const text = chunkPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
+    batches.push({ startPage, endPage, count, pdfStart, pdfEnd, text });
   }
 
   let title = '';
@@ -264,20 +236,17 @@ async function generateInBatches(
   const allPages: GeneratedPage[] = [];
 
   for (let b = 0; b < batches.length; b++) {
-    const { startPage, endPage, count, pdfStart, pdfEnd } = batches[b];
-    onStatus?.(`Batch ${b + 1}/${batches.length} — splitting PDF pages ${pdfStart}-${pdfEnd}...`);
-
-    const chunkBase64 = await extractPdfPages(base64, pdfStart, pdfEnd);
-
-    onStatus?.(`Batch ${b + 1}/${batches.length} — generating pages ${startPage}-${endPage}...`);
+    const { startPage, endPage, count, pdfStart, pdfEnd, text } = batches[b];
+    onStatus?.(`Batch ${b + 1}/${batches.length} — generating pages ${startPage}-${endPage} (PDF pages ${pdfStart}-${pdfEnd})...`);
 
     const prompt = buildBatchPrompt(
       format, b, batches.length,
       startPage, endPage, count,
       expectedPages, pdfStart, pdfEnd, totalPdfPages,
+      text,
     );
 
-    const raw = await callWithRetry(() => callApi(chunkBase64, prompt));
+    const raw = await callWithRetry(() => callApi(prompt));
     const parsed = JSON.parse(raw);
 
     if (b === 0) {
@@ -297,19 +266,12 @@ async function generateInBatches(
   return { title, author, summary, pages: allPages.slice(0, expectedPages) };
 }
 
-// ---------- Gemini direct API call ----------
+// ---------- API call factories ----------
 
-function makeGeminiCall(apiKey: string): BatchCallFn {
-  return async (base64: string, prompt: string): Promise<string> => {
+function makeGeminiCall(apiKey: string): TextCallFn {
+  return async (prompt: string): Promise<string> => {
     const body = {
-      contents: [
-        {
-          parts: [
-            { inlineData: { mimeType: 'application/pdf', data: base64 } },
-            { text: prompt },
-          ],
-        },
-      ],
+      contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.7,
@@ -334,10 +296,8 @@ function makeGeminiCall(apiKey: string): BatchCallFn {
   };
 }
 
-// ---------- OpenRouter API call ----------
-
-function makeOpenRouterCall(apiKey: string, model: string): BatchCallFn {
-  return async (base64: string, prompt: string): Promise<string> => {
+function makeOpenRouterCall(apiKey: string, model: string): TextCallFn {
+  return async (prompt: string): Promise<string> => {
     const res = await fetch(OPENROUTER_ENDPOINT, {
       method: 'POST',
       headers: {
@@ -347,15 +307,7 @@ function makeOpenRouterCall(apiKey: string, model: string): BatchCallFn {
       },
       body: JSON.stringify({
         model,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: prompt },
-              { type: 'image_url', image_url: { url: `data:application/pdf;base64,${base64}` } },
-            ],
-          },
-        ],
+        messages: [{ role: 'user', content: prompt }],
         temperature: 0.7,
         response_format: { type: 'json_object' },
       }),
@@ -383,17 +335,16 @@ export async function generateFormatFromPdf(
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('Gemini API key not available');
 
-  onStatus?.('Reading PDF...');
-  const base64 = await readPdfAsBase64(fileUri);
+  onStatus?.('Extracting text from PDF...');
+  const ocrText = await ocrPdf(fileUri);
+  const ocrPages = parseOcrPages(ocrText);
+  if (ocrPages.length === 0) throw new Error('OCR returned no pages. The PDF may be empty or unreadable.');
 
-  onStatus?.('Counting pages...');
-  const totalPages = await getPageCount(base64);
-  if (totalPages === 0) throw new Error('Could not detect page count from PDF');
-
+  const totalPages = ocrPages.length;
   const expected = computeExpectedPages(format, totalPages);
-  onStatus?.(`${totalPages} pages detected → generating ${expected} ${formatLabel(format)} pages...`);
+  onStatus?.(`${totalPages} pages extracted → generating ${expected} ${formatLabel(format)} pages...`);
 
-  return generateInBatches(base64, totalPages, format, makeGeminiCall(apiKey), onStatus);
+  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), onStatus);
 }
 
 export async function generateFormatFromPdfOpenRouter(
@@ -407,15 +358,14 @@ export async function generateFormatFromPdfOpenRouter(
 
   const useModel = model || OPENROUTER_MODEL;
 
-  onStatus?.('Reading PDF...');
-  const base64 = await readPdfAsBase64(fileUri);
+  onStatus?.('Extracting text from PDF...');
+  const ocrText = await ocrPdf(fileUri);
+  const ocrPages = parseOcrPages(ocrText);
+  if (ocrPages.length === 0) throw new Error('OCR returned no pages. The PDF may be empty or unreadable.');
 
-  onStatus?.('Counting pages...');
-  const totalPages = await getPageCount(base64);
-  if (totalPages === 0) throw new Error('Could not detect page count from PDF');
-
+  const totalPages = ocrPages.length;
   const expected = computeExpectedPages(format, totalPages);
-  onStatus?.(`${totalPages} pages detected → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
+  onStatus?.(`${totalPages} pages extracted → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
 
-  return generateInBatches(base64, totalPages, format, makeOpenRouterCall(apiKey, useModel), onStatus);
+  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), onStatus);
 }
