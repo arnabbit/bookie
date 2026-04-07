@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,31 @@ export default function ProfileScreen() {
   const router = useRouter();
   const [bio, setBio] = useState('');
   const [editing, setEditing] = useState(false);
+  const [booksRead, setBooksRead] = useState(0);
+  const [pagesRead, setPagesRead] = useState(0);
+  const [friendsCount, setFriendsCount] = useState(0);
+
+  const fetchStats = useCallback(async () => {
+    if (!token) return;
+    const headers = { Authorization: `Bearer ${token}` };
+    try {
+      const [booksRes, friendsRes] = await Promise.all([
+        fetch(`${API_URL}/api/books/my-books`, { headers }),
+        fetch(`${API_URL}/api/friends`, { headers }),
+      ]);
+      if (booksRes.ok) {
+        const books = await booksRes.json();
+        setBooksRead(books.filter((b: any) => b.progress >= 1).length);
+        setPagesRead(books.reduce((sum: number, b: any) => sum + (b.readingPosition || 0), 0));
+      }
+      if (friendsRes.ok) {
+        const friends = await friendsRes.json();
+        setFriendsCount(friends.length);
+      }
+    } catch {}
+  }, [token]);
+
+  useEffect(() => { fetchStats(); }, [fetchStats]);
 
   const handleLogout = () => {
     if (Platform.OS === 'web') {
@@ -93,15 +118,15 @@ export default function ProfileScreen() {
       {/* Stats */}
       <View style={styles.statsGrid}>
         <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerLow }]}>
-          <Text style={[styles.statNumber, { color: colors.tertiary }]}>0</Text>
+          <Text style={[styles.statNumber, { color: colors.tertiary }]}>{booksRead}</Text>
           <Text style={styles.statLabel}>Books Read</Text>
         </View>
         <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerHighest }]}>
-          <Text style={styles.statNumber}>0</Text>
+          <Text style={styles.statNumber}>{pagesRead}</Text>
           <Text style={styles.statLabel}>Pages Read</Text>
         </View>
         <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerLow }]}>
-          <Text style={styles.statNumber}>0</Text>
+          <Text style={styles.statNumber}>{friendsCount}</Text>
           <Text style={styles.statLabel}>Friends</Text>
         </View>
       </View>
