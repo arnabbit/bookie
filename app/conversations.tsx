@@ -73,7 +73,7 @@ export default function ConversationsScreen() {
   const isUnread = (conv: Conversation) => {
     if (!conv.lastMessage || !user?.id) return false;
     const myReadAt = conv.readBy?.[user.id];
-    if (!myReadAt) return true;
+    if (!myReadAt) return false; // no read tracking yet — treat as read
     return new Date(conv.updatedAt) > new Date(myReadAt);
   };
 
