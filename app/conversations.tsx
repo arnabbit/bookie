@@ -27,6 +27,7 @@ interface Conversation {
   };
   lastMessagePreview: string;
   updatedAt: string;
+  readBy?: Record<string, string>;
 }
 
 const timeAgo = (dateStr: string) => {
@@ -69,9 +70,17 @@ export default function ConversationsScreen() {
     return conv.participants.find((p) => p._id !== user?.id);
   };
 
+  const isUnread = (conv: Conversation) => {
+    if (!conv.lastMessage || !user?.id) return false;
+    const myReadAt = conv.readBy?.[user.id];
+    if (!myReadAt) return true;
+    return new Date(conv.updatedAt) > new Date(myReadAt);
+  };
+
   const renderConversation = ({ item }: { item: Conversation }) => {
     const other = getOtherUser(item);
     if (!other) return null;
+    const unread = isUnread(item);
 
     return (
       <TouchableOpacity
@@ -81,20 +90,23 @@ export default function ConversationsScreen() {
           params: { id: item._id, username: other.username },
         })}
       >
-        <View style={styles.avatar}>
+        <View style={[styles.avatar, unread && styles.avatarUnread]}>
           <Text style={styles.avatarText}>
             {(other.username?.substring(0, 2) || 'U').toUpperCase()}
           </Text>
         </View>
         <View style={styles.info}>
-          <Text style={styles.name}>{other.username}</Text>
-          <Text style={styles.preview} numberOfLines={1}>
+          <Text style={[styles.name, unread && styles.nameUnread]}>{other.username}</Text>
+          <Text style={[styles.preview, unread && styles.previewUnread]} numberOfLines={1}>
             {item.lastMessagePreview || 'Start chatting...'}
           </Text>
         </View>
-        {item.updatedAt && (
-          <Text style={styles.time}>{timeAgo(item.updatedAt)}</Text>
-        )}
+        <View style={styles.timeCol}>
+          {item.updatedAt && (
+            <Text style={[styles.time, unread && styles.timeUnread]}>{timeAgo(item.updatedAt)}</Text>
+          )}
+          {unread && <View style={styles.unreadDot} />}
+        </View>
       </TouchableOpacity>
     );
   };
@@ -164,8 +176,14 @@ const styles = StyleSheet.create({
   avatarText: { color: '#fff', fontSize: 18, fontWeight: '700' },
   info: { flex: 1 },
   name: { fontSize: 16, fontWeight: '600', color: '#1a1a2e' },
+  nameUnread: { fontWeight: '800' },
   preview: { fontSize: 14, color: '#999', marginTop: 2 },
+  previewUnread: { color: '#1a1a2e', fontWeight: '600' },
+  timeCol: { alignItems: 'flex-end', gap: 6 },
   time: { fontSize: 12, color: '#bbb' },
+  timeUnread: { color: '#705d00', fontWeight: '600' },
+  avatarUnread: { backgroundColor: '#705d00' },
+  unreadDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#c9a900' },
   separator: { height: 1, backgroundColor: '#f5f5f5', marginLeft: 78 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
   empty: { fontSize: 15, color: '#999', textAlign: 'center' },

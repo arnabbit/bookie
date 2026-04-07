@@ -52,8 +52,10 @@ export default function ChatScreen() {
     const socket = io(API_URL, { auth: { token }, transports: ['websocket'] });
     socketRef.current = socket;
     socket.emit('join-conversation', conversationId);
+    socket.emit('mark-read', { conversationId });
     socket.on('new-message', (message: Message) => {
       setMessages((prev) => [...prev, message]);
+      socket.emit('mark-read', { conversationId });
     });
     return () => {
       socket.emit('leave-conversation', conversationId);

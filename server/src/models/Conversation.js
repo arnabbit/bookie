@@ -5,6 +5,7 @@ const conversationSchema = new mongoose.Schema({
   lastMessage: { type: mongoose.Schema.Types.ObjectId, ref: 'Message' },
   lastMessagePreview: { type: String, default: '' },
   updatedAt: { type: Date, default: Date.now },
+  readBy: { type: Map, of: Date, default: {} },
 });
 
 conversationSchema.index({ participants: 1 });

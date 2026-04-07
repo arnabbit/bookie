@@ -113,6 +113,18 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Mark conversation as read
+  socket.on('mark-read', async ({ conversationId }) => {
+    if (!userId) return;
+    try {
+      await Conversation.findByIdAndUpdate(conversationId, {
+        [`readBy.${userId}`]: new Date(),
+      });
+    } catch (err) {
+      console.error('Socket mark-read error:', err.message);
+    }
+  });
+
   // Typing indicator
   socket.on('typing', ({ conversationId }) => {
     socket.to(conversationId).emit('user-typing', { userId });
