@@ -64,19 +64,7 @@ export default function SocialScreen() {
         const outgoing = await outgoingRes.json();
         setSentRequests(outgoing.map((r: any) => r.to._id));
       }
-      if (convsRes.ok) {
-        const convs = await convsRes.json();
-        console.log('DEBUG convs:', JSON.stringify(convs.map((c: any) => ({
-          id: c._id,
-          participants: c.participants?.map((p: any) => p._id),
-          lastMessage: !!c.lastMessage,
-          readBy: c.readBy,
-          updatedAt: c.updatedAt,
-        }))));
-        console.log('DEBUG user.id:', user?.id);
-        console.log('DEBUG friend ids:', friends.map((f) => f._id));
-        setConversations(convs);
-      }
+      if (convsRes.ok) setConversations(await convsRes.json());
     } catch (err) { console.error('social fetch error:', err); }
   }, [token]);
 
