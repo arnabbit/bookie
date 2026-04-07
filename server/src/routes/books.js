@@ -66,7 +66,7 @@ router.get('/my-books', authMiddleware, async (req, res) => {
         addedAt: ub.addedAt,
         pageCount,
         readingPosition,
-        progress: pageCount > 0 ? Math.min(readingPosition / pageCount, 1) : 0,
+        progress: pageCount > 0 ? Math.min((readingPosition + 1) / pageCount, 1) : 0,
       };
     }));
   } catch (err) {
