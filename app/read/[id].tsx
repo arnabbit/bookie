@@ -50,6 +50,7 @@ export default function BookReaderScreen() {
         if (posRes.ok) {
           const pos = await posRes.json();
           savedPageRef.current = pos.page || 0;
+          console.log('[READER] fetched saved position:', savedPageRef.current);
         }
       } catch { /* ignore */ }
       finally { setLoading(false); }
@@ -78,6 +79,7 @@ export default function BookReaderScreen() {
   // Save reading position on page change (skip while loading to avoid overwriting saved pos with 0)
   useEffect(() => {
     if (!id || loading) return;
+    console.log('[READER] save-position effect fired, currentPage:', currentPage, 'savedPage:', savedPageRef.current);
     fetch(`${API_URL}/api/books/${id}/position`, {
       method: 'POST',
       headers: {
@@ -90,7 +92,9 @@ export default function BookReaderScreen() {
 
   // Scroll to saved page once listHeight is known
   useEffect(() => {
+    console.log('[READER] listHeight effect — listHeight:', listHeight, 'savedPage:', savedPageRef.current);
     if (flatListRef.current && listHeight > 0 && savedPageRef.current > 0) {
+      console.log('[READER] scrollToIndex:', savedPageRef.current);
       flatListRef.current.scrollToIndex({ index: savedPageRef.current, animated: false });
     }
   }, [listHeight]);
@@ -100,8 +104,16 @@ export default function BookReaderScreen() {
 
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
     if (viewableItems.length > 0 && viewableItems[0].index != null) {
-      currentIndexRef.current = viewableItems[0].index;
-      setCurrentPage(viewableItems[0].index);
+      const idx = viewableItems[0].index;
+      const prev = currentIndexRef.current;
+      const jump = Math.abs(idx - prev);
+      console.log('[READER] onViewableItemsChanged:', idx, 'prev:', prev, 'jump:', jump);
+      if (jump > 2 && prev > idx) {
+        console.log('[READER] BLOCKED suspicious backwards jump from', prev, 'to', idx);
+        return;
+      }
+      currentIndexRef.current = idx;
+      setCurrentPage(idx);
     }
   }).current;
 
