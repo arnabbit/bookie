@@ -29,20 +29,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // MongoDB returns _id, our interface uses id
+  const normalizeUser = (data: any): User => ({
+    ...data,
+    id: data.id || data._id,
+  });
+
   useEffect(() => {
     (async () => {
       const storedToken = await AsyncStorage.getItem(STORAGE_KEYS.token);
       const storedUser = await AsyncStorage.getItem(STORAGE_KEYS.user);
       if (storedToken && storedUser) {
         setToken(storedToken);
-        setUser(JSON.parse(storedUser));
+        setUser(normalizeUser(JSON.parse(storedUser)));
         // Validate token
         try {
           const res = await fetch(`${API_URL}/api/auth/me`, {
             headers: { Authorization: `Bearer ${storedToken}` },
           });
           if (res.ok) {
-            const data = await res.json();
+            const data = normalizeUser(await res.json());
             setUser(data);
             await AsyncStorage.setItem(STORAGE_KEYS.user, JSON.stringify(data));
           } else {
@@ -60,10 +66,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (jwtToken: string, userData: User) => {
+    const normalized = normalizeUser(userData);
     setToken(jwtToken);
-    setUser(userData);
+    setUser(normalized);
     await AsyncStorage.setItem(STORAGE_KEYS.token, jwtToken);
-    await AsyncStorage.setItem(STORAGE_KEYS.user, JSON.stringify(userData));
+    await AsyncStorage.setItem(STORAGE_KEYS.user, JSON.stringify(normalized));
   };
 
   const logout = async () => {
@@ -83,7 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ username }),
       });
       if (!res.ok) return false;
-      const data = await res.json();
+      const data = normalizeUser(await res.json());
       setUser(data);
       await AsyncStorage.setItem(STORAGE_KEYS.user, JSON.stringify(data));
       return true;
