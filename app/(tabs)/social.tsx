@@ -30,12 +30,21 @@ interface UserResult {
   avatar?: string;
   bio?: string;
 }
+interface Conversation {
+  _id: string;
+  participants: { _id: string; username: string }[];
+  lastMessage?: { _id: string };
+  lastMessagePreview?: string;
+  updatedAt: string;
+  readBy?: Record<string, string>;
+}
 
 export default function SocialScreen() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const router = useRouter();
   const [friends, setFriends] = useState<Friend[]>([]);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<UserResult[]>([]);
   const [showSearch, setShowSearch] = useState(false);
@@ -43,10 +52,11 @@ export default function SocialScreen() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [friendsRes, requestsRes, outgoingRes] = await Promise.all([
+      const [friendsRes, requestsRes, outgoingRes, convsRes] = await Promise.all([
         fetch(`${API_URL}/api/friends`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_URL}/api/friends/requests/incoming`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_URL}/api/friends/requests/outgoing`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_URL}/api/chat/conversations`, { headers: { Authorization: `Bearer ${token}` } }),
       ]);
       if (friendsRes.ok) setFriends(await friendsRes.json());
       if (requestsRes.ok) setRequests(await requestsRes.json());
@@ -54,6 +64,7 @@ export default function SocialScreen() {
         const outgoing = await outgoingRes.json();
         setSentRequests(outgoing.map((r: any) => r.to._id));
       }
+      if (convsRes.ok) setConversations(await convsRes.json());
     } catch { /* ignore */ }
   }, [token]);
 
@@ -108,6 +119,16 @@ export default function SocialScreen() {
   };
 
   const initials = (name?: string) => (name?.substring(0, 2) || '?').toUpperCase();
+
+  const hasUnread = (friendId: string) => {
+    const conv = conversations.find((c) =>
+      c.participants.some((p) => p._id === friendId)
+    );
+    if (!conv || !conv.lastMessage || !user?.id) return false;
+    const myReadAt = conv.readBy?.[user.id];
+    if (!myReadAt) return true;
+    return new Date(conv.updatedAt) > new Date(myReadAt);
+  };
 
   return (
     <View style={styles.container}>
@@ -173,30 +194,36 @@ export default function SocialScreen() {
               <Text style={styles.emptyText}>No friends yet. Search and add people!</Text>
             </View>
           ) : (
-            friends.map((item) => (
-              <TouchableOpacity
-                key={item._id}
-                style={styles.friendRow}
-                onPress={() => openChat(item._id, item.username)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.friendAvatar}>
-                  <Text style={styles.friendAvatarText}>{initials(item.username)}</Text>
-                </View>
-                <View style={styles.friendInfo}>
-                  <Text style={styles.friendName}>{item.username}</Text>
-                  {item.bio ? (
-                    <Text style={styles.friendBio} numberOfLines={1}>{item.bio}</Text>
-                  ) : null}
-                </View>
+            friends.map((item) => {
+              const unread = hasUnread(item._id);
+              return (
                 <TouchableOpacity
-                  style={styles.chatBtn}
+                  key={item._id}
+                  style={styles.friendRow}
                   onPress={() => openChat(item._id, item.username)}
+                  activeOpacity={0.7}
                 >
-                  <Ionicons name="chatbubble-outline" size={20} color={colors.onSurfaceVariant} />
+                  <View style={[styles.friendAvatar, unread && styles.friendAvatarUnread]}>
+                    <Text style={styles.friendAvatarText}>{initials(item.username)}</Text>
+                  </View>
+                  <View style={styles.friendInfo}>
+                    <Text style={[styles.friendName, unread && styles.friendNameUnread]}>{item.username}</Text>
+                    {item.bio ? (
+                      <Text style={styles.friendBio} numberOfLines={1}>{item.bio}</Text>
+                    ) : null}
+                  </View>
+                  <View style={styles.chatBtnWrap}>
+                    <TouchableOpacity
+                      style={styles.chatBtn}
+                      onPress={() => openChat(item._id, item.username)}
+                    >
+                      <Ionicons name="chatbubble-outline" size={20} color={unread ? colors.tertiary : colors.onSurfaceVariant} />
+                    </TouchableOpacity>
+                    {unread && <View style={styles.unreadDot} />}
+                  </View>
                 </TouchableOpacity>
-              </TouchableOpacity>
-            ))
+              );
+            })
           )}
         </View>
       </ScrollView>
@@ -433,6 +460,13 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     marginTop: 2,
   },
+  friendAvatarUnread: {
+    backgroundColor: colors.tertiary + '30',
+    borderWidth: 2,
+    borderColor: colors.tertiary,
+  },
+  friendNameUnread: { fontWeight: '800' },
+  chatBtnWrap: { alignItems: 'center', gap: 4 },
   chatBtn: {
     width: 44,
     height: 44,
@@ -440,6 +474,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceContainerHighest,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  unreadDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.tertiary,
   },
 
   // Empty
