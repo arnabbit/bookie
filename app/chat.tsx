@@ -92,12 +92,12 @@ export default function ChatScreen() {
           const readAt = conv?.readBy?.[user?.id || ''];
           if (readAt && msgs.length > 0) {
             const idx = msgs.findIndex((m) => new Date(m.createdAt) > new Date(readAt));
-            setFirstUnreadIndex(idx >= 0 ? idx : msgs.length - 1);
+            setFirstUnreadIndex(idx >= 0 ? idx : null);
           } else if (!readAt && msgs.length > 0) {
             // Never read — scroll to first message (index 0)
             setFirstUnreadIndex(0);
           } else {
-            setFirstUnreadIndex(msgs.length - 1);
+            setFirstUnreadIndex(null);
           }
         } else {
           setFirstUnreadIndex(msgs.length > 0 ? msgs.length - 1 : null);
@@ -258,12 +258,17 @@ export default function ChatScreen() {
           renderItem={renderMessage}
           contentContainerStyle={styles.messagesList}
           style={{ flex: 1, backgroundColor: colors.surface }}
-          initialScrollIndex={firstUnreadIndex ?? undefined}
-          getItemLayout={(_, index) => ({ length: 60, offset: 60 * index, index })}
-          onContentSizeChange={() => {
-            if (firstUnreadIndex == null && messages.length > 0) {
-              flatListRef.current?.scrollToEnd({ animated: false });
+          onLayout={() => {
+            if (!loading && messages.length > 0) {
+              if (firstUnreadIndex != null && firstUnreadIndex < messages.length - 1) {
+                setTimeout(() => flatListRef.current?.scrollToIndex({ index: firstUnreadIndex, animated: false, viewPosition: 0 }), 50);
+              } else {
+                setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 50);
+              }
             }
+          }}
+          onScrollToIndexFailed={(info) => {
+            setTimeout(() => flatListRef.current?.scrollToIndex({ index: info.index, animated: false }), 200);
           }}
         />
       )}
