@@ -58,7 +58,6 @@ export default function LoginScreen() {
   const handleSubmit = async () => {
     if (!username.trim()) { setError('Username is required'); return; }
     if (!password.trim()) { setError('Password is required'); return; }
-    if (!pwStrong) { setError('Password does not meet all requirements'); return; }
     if (!captchaAnswer.trim()) { setError('Please solve the verification'); return; }
 
     setLoading(true);
