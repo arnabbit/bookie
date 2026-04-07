@@ -35,15 +35,41 @@ export default function ChatScreen() {
   const [loading, setLoading] = useState(true);
   const [showBookPicker, setShowBookPicker] = useState(false);
   const [books, setBooks] = useState<any[]>([]);
+  const [firstUnreadIndex, setFirstUnreadIndex] = useState<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/api/chat/conversations/${conversationId}/messages`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) setMessages(await res.json());
+        const [msgsRes, convRes] = await Promise.all([
+          fetch(`${API_URL}/api/chat/conversations/${conversationId}/messages`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${API_URL}/api/chat/conversations`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+        const msgs: Message[] = msgsRes.ok ? await msgsRes.json() : [];
+        setMessages(msgs);
+
+        // Find first unread message
+        if (convRes.ok) {
+          const convs = await convRes.json();
+          const conv = convs.find((c: any) => c._id === conversationId);
+          const readAt = conv?.readBy?.[user?.id || ''];
+          if (readAt && msgs.length > 0) {
+            const idx = msgs.findIndex((m) => new Date(m.createdAt) > new Date(readAt));
+            setFirstUnreadIndex(idx >= 0 ? idx : msgs.length - 1);
+          } else if (!readAt && msgs.length > 0) {
+            // Never read — scroll to first message (index 0)
+            setFirstUnreadIndex(0);
+          } else {
+            setFirstUnreadIndex(msgs.length - 1);
+          }
+        } else {
+          setFirstUnreadIndex(msgs.length > 0 ? msgs.length - 1 : null);
+        }
       } catch {} finally { setLoading(false); }
     })();
   }, [conversationId, token]);
@@ -56,6 +82,7 @@ export default function ChatScreen() {
     socket.on('new-message', (message: Message) => {
       setMessages((prev) => [...prev, message]);
       socket.emit('mark-read', { conversationId });
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     });
     return () => {
       socket.emit('leave-conversation', conversationId);
@@ -173,11 +200,19 @@ export default function ChatScreen() {
         <ActivityIndicator style={{ flex: 1 }} color={colors.tertiary} />
       ) : (
         <FlatList
+          ref={flatListRef}
           data={messages}
           keyExtractor={(item) => item._id}
           renderItem={renderMessage}
           contentContainerStyle={styles.messagesList}
           style={{ flex: 1, backgroundColor: colors.surface }}
+          initialScrollIndex={firstUnreadIndex ?? undefined}
+          getItemLayout={(_, index) => ({ length: 60, offset: 60 * index, index })}
+          onContentSizeChange={() => {
+            if (firstUnreadIndex == null && messages.length > 0) {
+              flatListRef.current?.scrollToEnd({ animated: false });
+            }
+          }}
         />
       )}
 
