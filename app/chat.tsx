@@ -283,7 +283,7 @@ export default function ChatScreen() {
           onScrollToIndexFailed={(info) => {
             console.log('[CHAT] scrollToIndexFailed:', info.index, 'highestMeasured:', info.highestMeasuredFrameIndex);
             setTimeout(() => flatListRef.current?.scrollToIndex({ index: info.index, animated: false }), 200);
-          }
+          }}
         />
       )}
 
