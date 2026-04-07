@@ -26,6 +26,20 @@ interface Message {
   createdAt: string;
 }
 
+const formatLastSeen = (dateStr: string) => {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const secs = Math.floor((now.getTime() - d.getTime()) / 1000);
+  if (secs < 60) return 'just now';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return d.toLocaleDateString();
+};
+
 export default function ChatScreen() {
   const { id: conversationId, username } = useLocalSearchParams<{ id: string; username: string }>();
   const { token, user } = useAuth();
@@ -36,6 +50,9 @@ export default function ChatScreen() {
   const [showBookPicker, setShowBookPicker] = useState(false);
   const [books, setBooks] = useState<any[]>([]);
   const [firstUnreadIndex, setFirstUnreadIndex] = useState<number | null>(null);
+  const [otherOnline, setOtherOnline] = useState(false);
+  const [otherLastSeen, setOtherLastSeen] = useState<string | null>(null);
+  const otherUserIdRef = useRef<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
@@ -53,10 +70,16 @@ export default function ChatScreen() {
         const msgs: Message[] = msgsRes.ok ? await msgsRes.json() : [];
         setMessages(msgs);
 
-        // Find first unread message
+        // Find first unread message + other user's online status
         if (convRes.ok) {
           const convs = await convRes.json();
           const conv = convs.find((c: any) => c._id === conversationId);
+          const other = conv?.participants?.find((p: any) => p._id !== user?.id);
+          if (other) {
+            otherUserIdRef.current = other._id;
+            setOtherOnline(!!other.isOnline);
+            setOtherLastSeen(other.lastSeen || null);
+          }
           const readAt = conv?.readBy?.[user?.id || ''];
           if (readAt && msgs.length > 0) {
             const idx = msgs.findIndex((m) => new Date(m.createdAt) > new Date(readAt));
@@ -83,9 +106,20 @@ export default function ChatScreen() {
       socket.emit('mark-read', { conversationId });
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     });
+    socket.on('user-online', (uid: string) => {
+      if (uid === otherUserIdRef.current) setOtherOnline(true);
+    });
+    socket.on('user-offline', (uid: string) => {
+      if (uid === otherUserIdRef.current) {
+        setOtherOnline(false);
+        setOtherLastSeen(new Date().toISOString());
+      }
+    });
     return () => {
       socket.emit('leave-conversation', conversationId);
       socket.off('new-message');
+      socket.off('user-online');
+      socket.off('user-offline');
       socket.disconnect();
     };
   }, [conversationId, token]);
@@ -196,7 +230,9 @@ export default function ChatScreen() {
         </TouchableOpacity>
         <View style={styles.headerInfo}>
           <Text style={styles.headerName}>{username}</Text>
-          <Text style={styles.headerStatus}>Online</Text>
+          <Text style={[styles.headerStatus, otherOnline && styles.headerStatusOnline]}>
+            {otherOnline ? 'Online' : otherLastSeen ? `Last seen ${formatLastSeen(otherLastSeen)}` : 'Offline'}
+          </Text>
         </View>
         <Ionicons name="ellipsis-vertical" size={20} color={colors.onSurfaceVariant} />
       </View>
@@ -305,7 +341,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 1.5,
-    color: colors.tertiary,
+    color: colors.onSurfaceVariant,
+  },
+  headerStatusOnline: {
+    color: '#16a34a',
   },
 
   // Messages

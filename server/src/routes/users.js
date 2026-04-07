@@ -57,7 +57,7 @@ router.put('/me', authMiddleware, async (req, res) => {
 // Get user profile by ID
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('username avatar bio createdAt');
+    const user = await User.findById(req.params.id).select('username avatar bio createdAt isOnline lastSeen');
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user);
   } catch (err) {

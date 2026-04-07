@@ -64,7 +64,7 @@ io.on('connection', (socket) => {
     onlineUsers.set(userId, socket.id);
 
     // Update user online status
-    User.findByIdAndUpdate(userId, { isOnline: true, lastSeen: new Date() });
+    await User.findByIdAndUpdate(userId, { isOnline: true, lastSeen: new Date() });
 
     // Broadcast online status
     socket.broadcast.emit('user-online', userId);
@@ -140,10 +140,10 @@ io.on('connection', (socket) => {
   });
 
   // Disconnect
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     if (userId) {
       onlineUsers.delete(userId);
-      User.findByIdAndUpdate(userId, { isOnline: false, lastSeen: new Date() });
+      await User.findByIdAndUpdate(userId, { isOnline: false, lastSeen: new Date() });
       io.emit('user-offline', userId);
     }
   });

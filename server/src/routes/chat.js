@@ -12,14 +12,14 @@ router.post('/conversation/with/:userId', authMiddleware, async (req, res) => {
     let conversation = await Conversation.findOne({
       participants: { $all: [req.user.id, userId] },
     })
-    .populate('participants', 'username avatar')
+    .populate('participants', 'username avatar isOnline lastSeen')
     .populate('lastMessage');
 
     if (!conversation) {
       conversation = await Conversation.create({
         participants: [req.user.id, userId],
       });
-      conversation = await conversation.populate('participants', 'username avatar');
+      conversation = await conversation.populate('participants', 'username avatar isOnline lastSeen');
     }
 
     res.json(conversation);
@@ -34,7 +34,7 @@ router.get('/conversations', authMiddleware, async (req, res) => {
     const conversations = await Conversation.find({
       participants: { $in: [req.user.id] },
     })
-    .populate('participants', 'username avatar')
+    .populate('participants', 'username avatar isOnline lastSeen')
     .populate('lastMessage')
     .sort({ updatedAt: -1 });
 
