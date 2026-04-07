@@ -284,9 +284,7 @@ export default function BookReaderScreen() {
             data={book.pages}
             renderItem={renderItem}
             keyExtractor={(_, i) => i.toString()}
-            snapToInterval={listHeight}
-            snapToAlignment="start"
-            decelerationRate="fast"
+            pagingEnabled
             bounces={false}
             overScrollMode="never"
             showsVerticalScrollIndicator={false}
