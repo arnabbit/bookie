@@ -3,7 +3,7 @@ import { ocrPdf } from './openrouter';
 const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = 'google/gemini-2.5-flash-lite';
+const OPENROUTER_MODEL = 'google/gemini-3.1-flash-lite-preview';
 const BATCH_SIZE = 20;
 const MAX_RETRIES = 3;
 

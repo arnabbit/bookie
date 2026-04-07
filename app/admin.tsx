@@ -73,7 +73,7 @@ export default function AdminScreen() {
   // Unsaved generated pages (preview before save)
   const [previewPages, setPreviewPages] = useState<GeneratedPage[] | null>(null);
   // Custom OpenRouter model
-  const [customModel, setCustomModel] = useState('google/gemini-2.5-flash-lite');
+  const [customModel, setCustomModel] = useState('google/gemini-3.1-flash-lite-preview');
   const [showCustomModel, setShowCustomModel] = useState(false);
 
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
