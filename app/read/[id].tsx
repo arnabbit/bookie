@@ -7,7 +7,6 @@ import {
   FlatList,
   ListRenderItem,
   Modal,
-  Platform,
   StyleSheet,
   Text,
   TextInput,
@@ -57,16 +56,7 @@ export default function BookReaderScreen() {
           console.log('[READER] fetched saved position:', savedPageRef.current);
         }
       } catch { /* ignore */ }
-      finally {
-        setLoading(false);
-        // Force settle after initial scroll has had time to land
-        setTimeout(() => {
-          if (!scrollSettled.current) {
-            scrollSettled.current = true;
-            console.log('[READER] forced settle after timeout');
-          }
-        }, 800);
-      }
+      finally { setLoading(false); }
     })();
   }, [id, token]);
 
@@ -89,22 +79,23 @@ export default function BookReaderScreen() {
     }
   }, [book, id, currentPage, fetchComments]);
 
-  // Save position when user leaves screen (fallback for cases without momentum end)
+  // Save reading position debounced (500ms after last page change)
   useEffect(() => {
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      if (!id || !scrollSettled.current) return;
-      const page = currentIndexRef.current;
+    if (!id || loading || !scrollSettled.current) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      console.log('[READER] save-position:', currentPage);
       fetch(`${API_URL}/api/books/${id}/position`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ page, format: format || 'mini' }),
+        body: JSON.stringify({ page: currentPage, format: format || 'mini' }),
       }).catch(() => {});
-    };
-  }, [id, token, format]);
+    }, 500);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [currentPage, loading]);
 
   // Track listHeight changes — if it shifts after initial render, re-scroll to current page
   useEffect(() => {
@@ -124,7 +115,8 @@ export default function BookReaderScreen() {
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
     if (viewableItems.length > 0 && viewableItems[0].index != null) {
       const idx = viewableItems[0].index;
-      console.log('[READER] onViewable:', idx, 'settled:', scrollSettled.current);
+      const prev = currentIndexRef.current;
+      console.log('[READER] onViewable:', idx, 'prev:', prev, 'settled:', scrollSettled.current);
       // Ignore events until initial scroll lands on the saved page
       if (!scrollSettled.current) {
         if (idx === savedPageRef.current || savedPageRef.current === 0) {
@@ -134,29 +126,10 @@ export default function BookReaderScreen() {
           return;
         }
       }
-      // Update the page indicator immediately for responsiveness
       currentIndexRef.current = idx;
       setCurrentPage(idx);
     }
   }).current;
-
-  // Only save position when scroll fully stops (not during momentum/bounce)
-  const onMomentumScrollEnd = useCallback(() => {
-    if (!scrollSettled.current) return;
-    const page = currentIndexRef.current;
-    console.log('[READER] momentum end, saving page:', page);
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      fetch(`${API_URL}/api/books/${id}/position`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ page, format: format || 'mini' }),
-      }).catch(() => {});
-    }, 300);
-  }, [id, token, format]);
 
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 50,
@@ -299,7 +272,7 @@ export default function BookReaderScreen() {
 
       {/* Swipeable vertical card carousel */}
       <View style={{ flex: 1 }} onLayout={(e) => {
-        const h = Math.floor(e.nativeEvent.layout.height);
+        const h = Math.round(e.nativeEvent.layout.height);
         if (h !== listHeightRef.current) {
           console.log('[READER] onLayout height:', h, 'prev:', listHeightRef.current);
           setListHeight(h);
@@ -312,12 +285,11 @@ export default function BookReaderScreen() {
             renderItem={renderItem}
             keyExtractor={(_, i) => i.toString()}
             pagingEnabled
-            {...(Platform.OS !== 'web' ? { bounces: false, overScrollMode: 'never' as const } : {})}
+            bounces={false}
+            overScrollMode="never"
             showsVerticalScrollIndicator={false}
-            style={Platform.OS === 'web' ? { overscrollBehavior: 'contain' } as any : undefined}
             onViewableItemsChanged={onViewableItemsChanged}
             viewabilityConfig={viewabilityConfig}
-            onMomentumScrollEnd={onMomentumScrollEnd}
             getItemLayout={getItemLayout}
             initialNumToRender={3}
             maxToRenderPerBatch={3}
