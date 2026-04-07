@@ -38,7 +38,15 @@ router.get('/conversations', authMiddleware, async (req, res) => {
     .populate('lastMessage')
     .sort({ updatedAt: -1 });
 
-    res.json(conversations);
+    // Convert Mongoose Map to plain object for readBy
+    const result = conversations.map((c) => {
+      const obj = c.toObject();
+      if (obj.readBy instanceof Map) {
+        obj.readBy = Object.fromEntries(obj.readBy);
+      }
+      return obj;
+    });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

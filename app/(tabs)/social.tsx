@@ -65,7 +65,7 @@ export default function SocialScreen() {
         setSentRequests(outgoing.map((r: any) => r.to._id));
       }
       if (convsRes.ok) setConversations(await convsRes.json());
-    } catch { /* ignore */ }
+    } catch (err) { console.error('social fetch error:', err); }
   }, [token]);
 
   useFocusEffect(useCallback(() => { fetchData(); }, [fetchData]));

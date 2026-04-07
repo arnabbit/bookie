@@ -60,7 +60,7 @@ export default function ConversationsScreen() {
           const data = await res.json();
           setConversations(data);
         }
-      } catch { /* ignore */ } finally {
+      } catch (err) { console.error('conversations load error:', err); } finally {
         setLoading(false);
       }
     })();

@@ -70,7 +70,7 @@ export default function ChatScreen() {
         } else {
           setFirstUnreadIndex(msgs.length > 0 ? msgs.length - 1 : null);
         }
-      } catch {} finally { setLoading(false); }
+      } catch (err) { console.error('chat load error:', err); } finally { setLoading(false); }
     })();
   }, [conversationId, token]);
 
@@ -78,7 +78,6 @@ export default function ChatScreen() {
     const socket = io(API_URL, { auth: { token }, transports: ['websocket'] });
     socketRef.current = socket;
     socket.emit('join-conversation', conversationId);
-    socket.emit('mark-read', { conversationId });
     socket.on('new-message', (message: Message) => {
       setMessages((prev) => [...prev, message]);
       socket.emit('mark-read', { conversationId });
@@ -90,6 +89,13 @@ export default function ChatScreen() {
       socket.disconnect();
     };
   }, [conversationId, token]);
+
+  // Mark read only after we've fetched readBy for scroll position
+  useEffect(() => {
+    if (firstUnreadIndex != null && socketRef.current) {
+      socketRef.current.emit('mark-read', { conversationId });
+    }
+  }, [firstUnreadIndex, conversationId]);
 
   const sendMessage = useCallback(
     (text: string, type: 'text' | 'book-share' = 'text', bookPage?: any) => {
