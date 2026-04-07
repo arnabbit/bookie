@@ -64,6 +64,7 @@ export default function ChatScreen() {
   const otherUserIdRef = useRef<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const hasScrolled = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -77,12 +78,14 @@ export default function ChatScreen() {
           }),
         ]);
         const msgs: Message[] = msgsRes.ok ? await msgsRes.json() : [];
+        console.log('[CHAT] msgs loaded:', msgs.length);
         setMessages(msgs);
 
         // Find first unread message + other user's online status
         if (convRes.ok) {
           const convs = await convRes.json();
           const conv = convs.find((c: any) => c._id === conversationId);
+          console.log('[CHAT] conv readBy:', JSON.stringify(conv?.readBy), 'userId:', user?.id);
           const other = conv?.participants?.find((p: any) => p._id !== user?.id);
           if (other) {
             otherUserIdRef.current = other._id;
@@ -90,16 +93,20 @@ export default function ChatScreen() {
             setOtherLastSeen(other.lastSeen || null);
           }
           const readAt = conv?.readBy?.[user?.id || ''];
+          console.log('[CHAT] readAt:', readAt);
           if (readAt && msgs.length > 0) {
             const idx = msgs.findIndex((m) => new Date(m.createdAt) > new Date(readAt));
+            console.log('[CHAT] unread idx:', idx, 'setting firstUnreadIndex:', idx >= 0 ? idx : null);
             setFirstUnreadIndex(idx >= 0 ? idx : null);
           } else if (!readAt && msgs.length > 0) {
-            // Never read — scroll to first message (index 0)
+            console.log('[CHAT] no readAt, setting firstUnreadIndex: 0');
             setFirstUnreadIndex(0);
           } else {
+            console.log('[CHAT] all read or no msgs, setting firstUnreadIndex: null');
             setFirstUnreadIndex(null);
           }
         } else {
+          console.log('[CHAT] convRes not ok, status:', convRes.status);
           setFirstUnreadIndex(msgs.length > 0 ? msgs.length - 1 : null);
         }
       } catch (err) { console.error('chat load error:', err); } finally { setLoading(false); }
@@ -134,12 +141,27 @@ export default function ChatScreen() {
     };
   }, [conversationId, token]);
 
-  // Mark read only after we've fetched readBy for scroll position
+  // Scroll to correct position once loading finishes, then mark read (once)
   useEffect(() => {
-    if (firstUnreadIndex != null && socketRef.current) {
-      socketRef.current.emit('mark-read', { conversationId });
-    }
-  }, [firstUnreadIndex, conversationId]);
+    if (loading || messages.length === 0 || hasScrolled.current) return;
+    hasScrolled.current = true;
+    console.log('[CHAT] scroll effect — firstUnreadIndex:', firstUnreadIndex, 'msgs:', messages.length);
+    const timer = setTimeout(() => {
+      if (firstUnreadIndex != null && firstUnreadIndex < messages.length - 1) {
+        console.log('[CHAT] scrollToIndex:', firstUnreadIndex);
+        flatListRef.current?.scrollToIndex({ index: firstUnreadIndex, animated: false, viewPosition: 0 });
+      } else {
+        console.log('[CHAT] scrollToEnd');
+        flatListRef.current?.scrollToEnd({ animated: false });
+      }
+      // Mark read after scroll lands
+      if (socketRef.current) {
+        console.log('[CHAT] mark-read emitted after scroll');
+        socketRef.current.emit('mark-read', { conversationId });
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [loading, messages.length, firstUnreadIndex]);
 
   const sendMessage = useCallback(
     (text: string, type: 'text' | 'book-share' = 'text', bookPage?: any) => {
@@ -258,18 +280,10 @@ export default function ChatScreen() {
           renderItem={renderMessage}
           contentContainerStyle={styles.messagesList}
           style={{ flex: 1, backgroundColor: colors.surface }}
-          onLayout={() => {
-            if (!loading && messages.length > 0) {
-              if (firstUnreadIndex != null && firstUnreadIndex < messages.length - 1) {
-                setTimeout(() => flatListRef.current?.scrollToIndex({ index: firstUnreadIndex, animated: false, viewPosition: 0 }), 50);
-              } else {
-                setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 50);
-              }
-            }
-          }}
           onScrollToIndexFailed={(info) => {
+            console.log('[CHAT] scrollToIndexFailed:', info.index, 'highestMeasured:', info.highestMeasuredFrameIndex);
             setTimeout(() => flatListRef.current?.scrollToIndex({ index: info.index, animated: false }), 200);
-          }}
+          }
         />
       )}
 
