@@ -46,7 +46,6 @@ router.get('/conversations', authMiddleware, async (req, res) => {
       }
       return obj;
     });
-    console.log('DEBUG /conversations participants:', JSON.stringify(result.map(c => c.participants)));
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });

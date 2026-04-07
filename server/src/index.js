@@ -62,17 +62,14 @@ io.on('connection', async (socket) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     userId = decoded.id;
     onlineUsers.set(userId, socket.id);
-    console.log('DEBUG socket connect: userId=', userId);
 
     // Update user online status
-    const updated = await User.findByIdAndUpdate(userId, { isOnline: true, lastSeen: new Date() }, { new: true });
-    console.log('DEBUG isOnline set true: userId=', userId, 'isOnline=', updated?.isOnline);
+    await User.findByIdAndUpdate(userId, { isOnline: true, lastSeen: new Date() });
 
     // Broadcast online status
     socket.broadcast.emit('user-online', userId);
-    console.log('DEBUG broadcast user-online:', userId);
-  } catch (err) {
-    console.log('Socket: unauthenticated connection attempt', err?.message);
+  } catch {
+    console.log('Socket: unauthenticated connection attempt');
   }
 
   // Join a conversation room
@@ -144,13 +141,10 @@ io.on('connection', async (socket) => {
 
   // Disconnect
   socket.on('disconnect', async () => {
-    console.log('DEBUG socket disconnect: userId=', userId);
     if (userId) {
       onlineUsers.delete(userId);
-      const updated = await User.findByIdAndUpdate(userId, { isOnline: false, lastSeen: new Date() }, { new: true });
-      console.log('DEBUG isOnline set false: userId=', userId, 'isOnline=', updated?.isOnline);
+      await User.findByIdAndUpdate(userId, { isOnline: false, lastSeen: new Date() });
       io.emit('user-offline', userId);
-      console.log('DEBUG broadcast user-offline:', userId);
     }
   });
 });

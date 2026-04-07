@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Modal,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_URL, useAuth } from '@/lib/AuthContext';
 import { io, Socket } from 'socket.io-client';
@@ -41,9 +41,18 @@ const formatLastSeen = (dateStr: string) => {
 };
 
 export default function ChatScreen() {
-  const { id: conversationId, username } = useLocalSearchParams<{ id: string; username: string }>();
+  const { id: conversationId, username, from } = useLocalSearchParams<{ id: string; username: string; from?: string }>();
   const { token, user } = useAuth();
   const router = useRouter();
+  const navigation = useNavigation();
+
+  const goBack = () => {
+    if (navigation.canGoBack()) {
+      router.back();
+    } else {
+      (router as any).replace(from || '/(tabs)/social');
+    }
+  };
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
@@ -74,17 +83,11 @@ export default function ChatScreen() {
         if (convRes.ok) {
           const convs = await convRes.json();
           const conv = convs.find((c: any) => c._id === conversationId);
-          console.log('DEBUG chat conv participants:', JSON.stringify(conv?.participants));
-          console.log('DEBUG chat user.id:', user?.id);
           const other = conv?.participants?.find((p: any) => p._id !== user?.id);
-          console.log('DEBUG chat other user:', JSON.stringify(other));
           if (other) {
             otherUserIdRef.current = other._id;
             setOtherOnline(!!other.isOnline);
             setOtherLastSeen(other.lastSeen || null);
-            console.log('DEBUG chat otherOnline:', other.isOnline, 'lastSeen:', other.lastSeen);
-          } else {
-            console.log('DEBUG chat: no other participant found');
           }
           const readAt = conv?.readBy?.[user?.id || ''];
           if (readAt && msgs.length > 0) {
@@ -113,11 +116,9 @@ export default function ChatScreen() {
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     });
     socket.on('user-online', (uid: string) => {
-      console.log('DEBUG socket user-online:', uid, 'otherRef:', otherUserIdRef.current);
       if (uid === otherUserIdRef.current) setOtherOnline(true);
     });
     socket.on('user-offline', (uid: string) => {
-      console.log('DEBUG socket user-offline:', uid, 'otherRef:', otherUserIdRef.current);
       if (uid === otherUserIdRef.current) {
         setOtherOnline(false);
         setOtherLastSeen(new Date().toISOString());
@@ -129,6 +130,7 @@ export default function ChatScreen() {
       socket.off('user-online');
       socket.off('user-offline');
       socket.disconnect();
+      socketRef.current = null;
     };
   }, [conversationId, token]);
 
@@ -233,7 +235,7 @@ export default function ChatScreen() {
     >
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.headerBack}>
+        <TouchableOpacity onPress={goBack} style={styles.headerBack}>
           <Ionicons name="arrow-back" size={24} color={colors.onSurface} />
         </TouchableOpacity>
         <View style={styles.headerInfo}>

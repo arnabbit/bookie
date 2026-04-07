@@ -128,7 +128,7 @@ export default function SocialScreen() {
       });
       if (res.ok) {
         const conv = await res.json();
-        (router as any).push({ pathname: '/chat', params: { id: conv._id, username } });
+        (router as any).push({ pathname: '/chat', params: { id: conv._id, username, from: '/(tabs)/social' } });
       } else {
         Alert.alert('Error', 'Could not open chat.');
       }

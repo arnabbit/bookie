@@ -87,7 +87,7 @@ export default function ConversationsScreen() {
         style={styles.item}
         onPress={() => (router as any).push({
           pathname: '/chat',
-          params: { id: item._id, username: other.username },
+          params: { id: item._id, username: other.username, from: '/conversations' },
         })}
       >
         <View style={[styles.avatar, unread && styles.avatarUnread]}>
