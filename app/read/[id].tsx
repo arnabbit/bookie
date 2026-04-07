@@ -33,6 +33,9 @@ export default function BookReaderScreen() {
   const flatListRef = useRef<FlatList>(null);
   const currentIndexRef = useRef(0);
   const savedPageRef = useRef(0);
+  const scrollSettled = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listHeightRef = useRef(0);
 
   // Fetch book + saved position
   useEffect(() => {
@@ -76,27 +79,34 @@ export default function BookReaderScreen() {
     }
   }, [book, id, currentPage, fetchComments]);
 
-  // Save reading position on page change (skip while loading to avoid overwriting saved pos with 0)
+  // Save reading position debounced (500ms after last page change)
   useEffect(() => {
-    if (!id || loading) return;
-    console.log('[READER] save-position effect fired, currentPage:', currentPage, 'savedPage:', savedPageRef.current);
-    fetch(`${API_URL}/api/books/${id}/position`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ page: currentPage, format: format || 'mini' }),
-    }).catch(() => {});
+    if (!id || loading || !scrollSettled.current) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      console.log('[READER] save-position:', currentPage);
+      fetch(`${API_URL}/api/books/${id}/position`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ page: currentPage, format: format || 'mini' }),
+      }).catch(() => {});
+    }, 500);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [currentPage, loading]);
 
-  // Scroll to saved page once listHeight is known
+  // Track listHeight changes — if it shifts after initial render, re-scroll to current page
   useEffect(() => {
-    console.log('[READER] listHeight effect — listHeight:', listHeight, 'savedPage:', savedPageRef.current);
-    if (flatListRef.current && listHeight > 0 && savedPageRef.current > 0) {
-      console.log('[READER] scrollToIndex:', savedPageRef.current);
-      flatListRef.current.scrollToIndex({ index: savedPageRef.current, animated: false });
+    if (!flatListRef.current || listHeight <= 0) return;
+    if (listHeightRef.current > 0 && listHeightRef.current !== listHeight) {
+      // Height changed after initial render — re-scroll to stay on current page
+      const target = currentIndexRef.current;
+      console.log('[READER] listHeight changed:', listHeightRef.current, '->', listHeight, 'rescroll to:', target);
+      setTimeout(() => flatListRef.current?.scrollToIndex({ index: target, animated: false }), 50);
     }
+    listHeightRef.current = listHeight;
   }, [listHeight]);
 
   const totalPages = book?.pages?.length || 0;
@@ -106,11 +116,15 @@ export default function BookReaderScreen() {
     if (viewableItems.length > 0 && viewableItems[0].index != null) {
       const idx = viewableItems[0].index;
       const prev = currentIndexRef.current;
-      const jump = Math.abs(idx - prev);
-      console.log('[READER] onViewableItemsChanged:', idx, 'prev:', prev, 'jump:', jump);
-      if (jump > 2 && prev > idx) {
-        console.log('[READER] BLOCKED suspicious backwards jump from', prev, 'to', idx);
-        return;
+      console.log('[READER] onViewable:', idx, 'prev:', prev, 'settled:', scrollSettled.current);
+      // Ignore events until initial scroll lands on the saved page
+      if (!scrollSettled.current) {
+        if (idx === savedPageRef.current || savedPageRef.current === 0) {
+          scrollSettled.current = true;
+          console.log('[READER] scroll settled at:', idx);
+        } else {
+          return;
+        }
       }
       currentIndexRef.current = idx;
       setCurrentPage(idx);
@@ -257,14 +271,22 @@ export default function BookReaderScreen() {
       </View>
 
       {/* Swipeable vertical card carousel */}
-      <View style={{ flex: 1 }} onLayout={(e) => setListHeight(e.nativeEvent.layout.height)}>
+      <View style={{ flex: 1 }} onLayout={(e) => {
+        const h = Math.round(e.nativeEvent.layout.height);
+        if (h !== listHeightRef.current) {
+          console.log('[READER] onLayout height:', h, 'prev:', listHeightRef.current);
+          setListHeight(h);
+        }
+      }}>
         {listHeight > 0 && (
           <FlatList
             ref={flatListRef}
             data={book.pages}
             renderItem={renderItem}
             keyExtractor={(_, i) => i.toString()}
-            pagingEnabled
+            snapToInterval={listHeight}
+            snapToAlignment="start"
+            decelerationRate="fast"
             bounces={false}
             overScrollMode="never"
             showsVerticalScrollIndicator={false}
