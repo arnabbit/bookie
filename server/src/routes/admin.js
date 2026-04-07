@@ -21,6 +21,13 @@ router.get('/gemini-key', (req, res) => {
   res.json({ key });
 });
 
+// GET /api/admin/openrouter-key — return server OpenRouter key to admin client
+router.get('/openrouter-key', (req, res) => {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) return res.status(404).json({ error: 'OPENROUTER_API_KEY not configured on server' });
+  res.json({ key });
+});
+
 // GET /api/admin/books — list all books with format status
 router.get('/books', async (req, res) => {
   try {

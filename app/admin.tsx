@@ -19,7 +19,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { API_URL, useAuth } from '@/lib/AuthContext';
 import { colors, fonts, radius, shadows, FORMAT_DISPLAY } from '@/lib/theme';
-import { generateFormatFromPdf, GeneratedPage } from '@/lib/geminiAdmin';
+import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, GeneratedPage } from '@/lib/geminiAdmin';
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
 type Screen = 'list' | 'editor';
@@ -67,8 +67,9 @@ export default function AdminScreen() {
   const [showNewBook, setShowNewBook] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newAuthor, setNewAuthor] = useState('');
-  // Gemini key (fetched from server)
+  // API keys (fetched from server)
   const [geminiKey, setGeminiKey] = useState('');
+  const [openRouterKey, setOpenRouterKey] = useState('');
   // Unsaved generated pages (preview before save)
   const [previewPages, setPreviewPages] = useState<GeneratedPage[] | null>(null);
 
@@ -82,12 +83,16 @@ export default function AdminScreen() {
     } catch {}
   }, [token]);
 
-  // Fetch gemini key
+  // Fetch API keys
   useEffect(() => {
     (async () => {
       try {
         const res = await fetch(`${API_URL}/api/admin/gemini-key`, { headers: { Authorization: `Bearer ${token}` } });
         if (res.ok) { const d = await res.json(); setGeminiKey(d.key); }
+      } catch {}
+      try {
+        const res = await fetch(`${API_URL}/api/admin/openrouter-key`, { headers: { Authorization: `Bearer ${token}` } });
+        if (res.ok) { const d = await res.json(); setOpenRouterKey(d.key); }
       } catch {}
     })();
   }, [token]);
@@ -193,6 +198,38 @@ export default function AdminScreen() {
         setMetaSummary(gen.summary);
       }
       // If title/author empty, use generated
+      if (!metaTitle && gen.title) setMetaTitle(gen.title);
+      if (!metaAuthor && gen.author) setMetaAuthor(gen.author);
+
+      setPreviewPages(gen.pages);
+      setGenStatus(`Generated ${gen.pages.length} pages. Review and save.`);
+    } catch (err: any) {
+      Alert.alert('Generation Failed', err.message || 'Unknown error');
+      setGenStatus('');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // Generate with Gemini via OpenRouter
+  const generateWithOpenRouter = async () => {
+    if (!openRouterKey) { Alert.alert('Error', 'Server OPENROUTER_API_KEY not configured'); return; }
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
+      if (result.canceled) return;
+      const file = result.assets[0];
+      if (!file) return;
+      if (file.size && file.size > 30 * 1024 * 1024) {
+        Alert.alert('Error', 'PDF too large (max 30MB)');
+        return;
+      }
+
+      setGenerating(true);
+      setGenStatus('Starting (OpenRouter)...');
+
+      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus);
+
+      if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
       if (!metaTitle && gen.title) setMetaTitle(gen.title);
       if (!metaAuthor && gen.author) setMetaAuthor(gen.author);
 
@@ -435,6 +472,14 @@ export default function AdminScreen() {
               >
                 <Ionicons name="sparkles" size={18} color={colors.tertiary} />
                 <Text style={s.actionBtnText}>Generate with Gemini</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.actionBtn, generating && { opacity: 0.5 }]}
+                onPress={generateWithOpenRouter}
+                disabled={generating}
+              >
+                <Ionicons name="flash" size={18} color={colors.tertiary} />
+                <Text style={s.actionBtnText}>Gemini (OpenRouter)</Text>
               </TouchableOpacity>
               <TouchableOpacity style={s.actionBtn} onPress={addPage}>
                 <Ionicons name="add-circle-outline" size={18} color={colors.tertiary} />

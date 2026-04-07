@@ -3,6 +3,8 @@ import { Platform } from 'react-native';
 
 const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = 'google/gemini-2.5-flash-lite';
 
 export interface GeneratedPage {
   pageNumber: number;
@@ -161,6 +163,76 @@ export async function generateFormatFromPdf(
   const parsed = JSON.parse(text);
   if (!parsed.pages || !Array.isArray(parsed.pages) || parsed.pages.length === 0) {
     throw new Error('Gemini returned no pages');
+  }
+
+  return {
+    title: parsed.title || '',
+    author: parsed.author || '',
+    summary: parsed.summary || '',
+    pages: parsed.pages.map((p: any, i: number) => ({
+      pageNumber: p.pageNumber ?? i + 1,
+      content: p.content || p.summary || '',
+    })),
+  };
+}
+
+export async function generateFormatFromPdfOpenRouter(
+  fileUri: string,
+  apiKey: string,
+  format: FormatType,
+  onStatus?: (msg: string) => void,
+): Promise<GenerationResult> {
+  if (!apiKey) throw new Error('OpenRouter API key not available');
+
+  onStatus?.('Reading PDF...');
+  const base64 = await readPdfAsBase64(fileUri);
+
+  const formatLabel = format === 'mini' ? 'Essentials' : format === 'pro' ? 'Abridged' : 'Full';
+  onStatus?.(`Generating ${formatLabel} pages via OpenRouter...`);
+
+  const res = await fetch(OPENROUTER_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://bookie.app',
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: FORMAT_PROMPTS[format],
+            },
+            {
+              type: 'image_url',
+              image_url: { url: `data:application/pdf;base64,${base64}` },
+            },
+          ],
+        },
+      ],
+      temperature: 0.7,
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenRouter error: ${res.status} — ${err.substring(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Empty response from OpenRouter');
+
+  onStatus?.('Parsing result...');
+
+  const parsed = JSON.parse(text);
+  if (!parsed.pages || !Array.isArray(parsed.pages) || parsed.pages.length === 0) {
+    throw new Error('OpenRouter returned no pages');
   }
 
   return {
