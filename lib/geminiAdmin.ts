@@ -89,15 +89,22 @@ Respond with ONLY valid JSON:
 
 async function readPdfAsBase64(fileUri: string): Promise<string> {
   if (Platform.OS === 'web') {
+    console.log('fetching fileUri:', fileUri);
     const res = await fetch(fileUri);
+    console.log('got blob response');
     const blob = await res.blob();
+    console.log('reading as base64, blob size:', blob.size);
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => {
+        console.log('FileReader onloadend fired');
         const dataUrl = reader.result as string;
         resolve(dataUrl.split(',')[1]);
       };
-      reader.onerror = reject;
+      reader.onerror = (e) => {
+        console.log('FileReader error:', e);
+        reject(e);
+      };
       reader.readAsDataURL(blob);
     });
   }
