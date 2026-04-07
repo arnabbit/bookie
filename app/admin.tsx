@@ -72,6 +72,9 @@ export default function AdminScreen() {
   const [openRouterKey, setOpenRouterKey] = useState('');
   // Unsaved generated pages (preview before save)
   const [previewPages, setPreviewPages] = useState<GeneratedPage[] | null>(null);
+  // Custom OpenRouter model
+  const [customModel, setCustomModel] = useState('google/gemini-2.5-flash-lite');
+  const [showCustomModel, setShowCustomModel] = useState(false);
 
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
@@ -228,6 +231,39 @@ export default function AdminScreen() {
       setGenStatus('Starting (OpenRouter)...');
 
       const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus);
+
+      if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
+      if (!metaTitle && gen.title) setMetaTitle(gen.title);
+      if (!metaAuthor && gen.author) setMetaAuthor(gen.author);
+
+      setPreviewPages(gen.pages);
+      setGenStatus(`Generated ${gen.pages.length} pages. Review and save.`);
+    } catch (err: any) {
+      Alert.alert('Generation Failed', err.message || 'Unknown error');
+      setGenStatus('');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // Generate with custom OpenRouter model
+  const generateWithCustomOpenRouter = async () => {
+    if (!openRouterKey) { Alert.alert('Error', 'Server OPENROUTER_API_KEY not configured'); return; }
+    if (!customModel.trim()) { Alert.alert('Error', 'Enter a model name'); return; }
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
+      if (result.canceled) return;
+      const file = result.assets[0];
+      if (!file) return;
+      if (file.size && file.size > 30 * 1024 * 1024) {
+        Alert.alert('Error', 'PDF too large (max 30MB)');
+        return;
+      }
+
+      setGenerating(true);
+      setGenStatus(`Starting (${customModel})...`);
+
+      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, customModel.trim());
 
       if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
       if (!metaTitle && gen.title) setMetaTitle(gen.title);
@@ -481,11 +517,38 @@ export default function AdminScreen() {
                 <Ionicons name="flash" size={18} color={colors.tertiary} />
                 <Text style={s.actionBtnText}>Gemini (OpenRouter)</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.actionBtn, generating && { opacity: 0.5 }]}
+                onPress={() => setShowCustomModel(!showCustomModel)}
+                disabled={generating}
+              >
+                <Ionicons name="code-slash" size={18} color={colors.tertiary} />
+                <Text style={s.actionBtnText}>OpenRouter (Custom)</Text>
+              </TouchableOpacity>
               <TouchableOpacity style={s.actionBtn} onPress={addPage}>
                 <Ionicons name="add-circle-outline" size={18} color={colors.tertiary} />
                 <Text style={s.actionBtnText}>Add Page</Text>
               </TouchableOpacity>
             </View>
+
+            {showCustomModel && (
+              <View style={s.customModelRow}>
+                <TextInput
+                  style={[s.input, { flex: 1, marginBottom: 0 }]}
+                  placeholder="e.g. google/gemini-2.5-flash-lite"
+                  placeholderTextColor={colors.outline}
+                  value={customModel}
+                  onChangeText={setCustomModel}
+                />
+                <TouchableOpacity
+                  style={[s.saveMetaBtn, { marginLeft: 8 }, generating && { opacity: 0.5 }]}
+                  onPress={generateWithCustomOpenRouter}
+                  disabled={generating}
+                >
+                  <Text style={s.saveMetaBtnText}>Generate</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {generating && (
               <View style={s.genStatus}>
@@ -694,7 +757,8 @@ const s = StyleSheet.create({
   formatTabCountActive: { color: colors.tertiary },
 
   // Actions
-  actionRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  actionRow: { flexDirection: 'row', gap: 8, marginTop: 4, flexWrap: 'wrap' },
+  customModelRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
   actionBtn: {
     flex: 1,
     flexDirection: 'row',

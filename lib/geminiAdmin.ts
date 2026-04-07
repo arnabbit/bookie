@@ -185,14 +185,17 @@ export async function generateFormatFromPdfOpenRouter(
   apiKey: string,
   format: FormatType,
   onStatus?: (msg: string) => void,
+  model?: string,
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('OpenRouter API key not available');
+
+  const useModel = model || OPENROUTER_MODEL;
 
   onStatus?.('Reading PDF...');
   const base64 = await readPdfAsBase64(fileUri);
 
   const formatLabel = format === 'mini' ? 'Essentials' : format === 'pro' ? 'Abridged' : 'Full';
-  onStatus?.(`Generating ${formatLabel} pages via OpenRouter...`);
+  onStatus?.(`Generating ${formatLabel} pages via OpenRouter (${useModel})...`);
 
   const res = await fetch(OPENROUTER_ENDPOINT, {
     method: 'POST',
@@ -202,7 +205,7 @@ export async function generateFormatFromPdfOpenRouter(
       'HTTP-Referer': 'https://bookie.app',
     },
     body: JSON.stringify({
-      model: OPENROUTER_MODEL,
+      model: useModel,
       messages: [
         {
           role: 'user',

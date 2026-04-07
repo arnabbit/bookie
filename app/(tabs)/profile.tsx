@@ -115,16 +115,6 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={18} color={colors.outlineVariant} />
           </TouchableOpacity>
         )}
-        <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/settings' as any)}>
-          <Ionicons name="settings-outline" size={22} color={colors.tertiary} />
-          <Text style={styles.menuRowText}>Account Settings</Text>
-          <Ionicons name="chevron-forward" size={18} color={colors.outlineVariant} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/help' as any)}>
-          <Ionicons name="help-circle-outline" size={22} color={colors.tertiary} />
-          <Text style={styles.menuRowText}>Help & Support</Text>
-          <Ionicons name="chevron-forward" size={18} color={colors.outlineVariant} />
-        </TouchableOpacity>
       </View>
 
       {/* Logout */}
