@@ -7,6 +7,7 @@ import {
   FlatList,
   ListRenderItem,
   Modal,
+  Platform,
   StyleSheet,
   Text,
   TextInput,
@@ -272,7 +273,7 @@ export default function BookReaderScreen() {
 
       {/* Swipeable vertical card carousel */}
       <View style={{ flex: 1 }} onLayout={(e) => {
-        const h = Math.round(e.nativeEvent.layout.height);
+        const h = Math.floor(e.nativeEvent.layout.height);
         if (h !== listHeightRef.current) {
           console.log('[READER] onLayout height:', h, 'prev:', listHeightRef.current);
           setListHeight(h);
@@ -285,8 +286,7 @@ export default function BookReaderScreen() {
             renderItem={renderItem}
             keyExtractor={(_, i) => i.toString()}
             pagingEnabled
-            bounces={false}
-            overScrollMode="never"
+            {...(Platform.OS !== 'web' && { bounces: false, overScrollMode: 'never' as const })}
             showsVerticalScrollIndicator={false}
             onViewableItemsChanged={onViewableItemsChanged}
             viewabilityConfig={viewabilityConfig}
