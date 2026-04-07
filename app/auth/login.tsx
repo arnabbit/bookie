@@ -26,6 +26,16 @@ export default function LoginScreen() {
   const [error, setError] = useState('');
   const { login } = useAuth();
 
+  const pwChecks = {
+    length: password.length >= 8,
+    upper: /[A-Z]/.test(password),
+    lower: /[a-z]/.test(password),
+    number: /\d/.test(password),
+    special: /[^A-Za-z0-9]/.test(password),
+  };
+  const pwStrong = Object.values(pwChecks).every(Boolean);
+  const pwStarted = password.length > 0;
+
   const fetchCaptcha = async () => {
     setCaptchaLoading(true);
     try {
@@ -48,6 +58,7 @@ export default function LoginScreen() {
   const handleSubmit = async () => {
     if (!username.trim()) { setError('Username is required'); return; }
     if (!password.trim()) { setError('Password is required'); return; }
+    if (!pwStrong) { setError('Password does not meet all requirements'); return; }
     if (!captchaAnswer.trim()) { setError('Please solve the verification'); return; }
 
     setLoading(true);
@@ -131,6 +142,21 @@ export default function LoginScreen() {
             secureTextEntry
             autoCapitalize="none"
           />
+          {pwStarted && !pwStrong && (
+            <View style={styles.pwHints}>
+              {([
+                ['length', '8+'],
+                ['upper', 'A-Z'],
+                ['lower', 'a-z'],
+                ['number', '0-9'],
+                ['special', '!@#'],
+              ] as const).map(([key, label]) => (
+                <View key={key} style={[styles.pwTag, pwChecks[key] && styles.pwTagPass]}>
+                  <Text style={[styles.pwTagText, pwChecks[key] && styles.pwTagTextPass]}>{label}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
           {/* Captcha */}
           <Text style={styles.label}>Verification</Text>
@@ -312,6 +338,11 @@ const styles = StyleSheet.create({
     color: colors.onSurface,
     borderWidth: 0,
   },
+  pwHints: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  pwTag: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: colors.error + '18' },
+  pwTagPass: { backgroundColor: '#2e7d3218' },
+  pwTagText: { fontSize: 11, fontFamily: fonts.bodyMedium, color: colors.error },
+  pwTagTextPass: { color: '#2e7d32' },
   errorText: {
     color: colors.error,
     fontSize: 13,
