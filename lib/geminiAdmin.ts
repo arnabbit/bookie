@@ -20,14 +20,27 @@ export interface GenerationResult {
 
 type FormatType = 'mini' | 'pro' | 'ultra';
 
-const FORMAT_PROMPTS: Record<FormatType, string> = {
-  mini: `You are a master literary condensation engine. Your task is to compress an ENTIRE book from beginning to end into ~10% of its page count — covering the full arc, not cherry-picking random sections.
+function countPdfPages(base64: string): number {
+  const raw = atob(base64);
+  // Count /Type /Page (but not /Type /Pages) — standard PDF page marker
+  const matches = raw.match(/\/Type\s*\/Page(?!s)/g);
+  return matches ? matches.length : 0;
+}
 
-Analyze this PDF book and produce a JSON response with:
+function buildPrompt(format: FormatType, totalPages: number): string {
+  const miniPages = Math.max(Math.round(totalPages * 0.1), 1);
+  const proPages = Math.max(Math.round(totalPages * 0.3), 1);
+
+  const prompts: Record<FormatType, string> = {
+    mini: `You are a master literary condensation engine. Your task is to compress an ENTIRE book from beginning to end into a fixed number of output pages — covering the full arc, not cherry-picking random sections.
+
+This PDF has ${totalPages} pages. You MUST produce EXACTLY ${miniPages} output pages.
+
+Instructions:
 1. Extract title and author.
 2. Write a one-paragraph summary of the entire book (100-150 words).
-3. Count the total pages in the PDF. Produce EXACTLY ~10% of that number as output pages. For a 200-page book → 20 pages. For a 50-page book → 5 pages.
-4. CRITICAL — FULL COVERAGE: Divide the entire book evenly across your output pages. If the book is 200 pages and you produce 20 output pages, each output page must cover roughly 10 consecutive original pages. Page 1 covers the book's beginning, your last page covers the book's ending. The reader must experience the complete journey from first page to last — no gaps, no skipped sections, no abrupt ending midway through.
+3. Produce EXACTLY ${miniPages} output pages — no more, no less.
+4. CRITICAL — FULL COVERAGE: Divide all ${totalPages} pages of the book evenly across your ${miniPages} output pages. Each output page covers roughly ${Math.round(totalPages / miniPages)} consecutive original pages. Output page 1 covers the book's beginning, output page ${miniPages} covers the book's ending. The reader must experience the complete journey from first page to last — no gaps, no skipped sections, no abrupt ending midway through.
 5. STRICT WORD COUNT: Each page MUST be exactly 60-80 words. Not 40, not 100. Count your words carefully. If a page is under 60 or over 80 words, rewrite it until it fits.
 6. For each output page, condense that section into its core idea, turning point, or thesis. Skip supporting arguments, examples, anecdotes — keep only what's load-bearing.
 7. Write in the author's voice. Every page should feel like a perfectly chosen excerpt.
@@ -45,13 +58,15 @@ Respond with ONLY valid JSON:
   ]
 }`,
 
-  pro: `You are a literary abridgment specialist. Your task is to retell an ENTIRE book from beginning to end in ~30% of its page count — preserving the full narrative arc at a faster pace, not extracting random highlights.
+    pro: `You are a literary abridgment specialist. Your task is to retell an ENTIRE book from beginning to end in a fixed number of output pages — preserving the full narrative arc at a faster pace, not extracting random highlights.
 
-Analyze this PDF book and produce a JSON response with:
+This PDF has ${totalPages} pages. You MUST produce EXACTLY ${proPages} output pages.
+
+Instructions:
 1. Extract title and author.
 2. Write a one-paragraph summary of the entire book (100-150 words).
-3. Count the total pages in the PDF. Produce EXACTLY ~30% of that number as output pages. For a 200-page book → 60 pages. For a 50-page book → 15 pages.
-4. CRITICAL — FULL COVERAGE: Divide the entire book evenly across your output pages. If the book is 200 pages and you produce 60 output pages, each output page must cover roughly 3-4 consecutive original pages. Page 1 covers the book's opening, your last page covers the book's conclusion. The reader must travel through the complete book from start to finish — no chapters skipped, no storylines dropped, no ending left out.
+3. Produce EXACTLY ${proPages} output pages — no more, no less.
+4. CRITICAL — FULL COVERAGE: Divide all ${totalPages} pages of the book evenly across your ${proPages} output pages. Each output page covers roughly ${Math.round(totalPages / proPages)} consecutive original pages. Output page 1 covers the book's opening, output page ${proPages} covers the book's conclusion. The reader must travel through the complete book from start to finish — no chapters skipped, no storylines dropped, no ending left out.
 5. STRICT WORD COUNT: Each page MUST be exactly 60-80 words. Not 40, not 100. Count your words carefully. If a page is under 60 or over 80 words, rewrite it until it fits.
 6. Preserve the narrative flow — arguments should build, characters should develop, ideas should layer. Include key examples and pivotal moments.
 7. Write in the author's authentic voice and style — never flatten into generic prose.
@@ -69,12 +84,14 @@ Respond with ONLY valid JSON:
   ]
 }`,
 
-  ultra: `You are a literary rewriter who channels any author's voice. Your task is to rewrite EVERY page of this book in a condensed but complete form — nothing is left out, every page is covered.
+    ultra: `You are a literary rewriter who channels any author's voice. Your task is to rewrite EVERY page of this book in a condensed but complete form — nothing is left out, every page is covered.
 
-Analyze this PDF book and produce a JSON response with:
+This PDF has ${totalPages} pages. You MUST produce EXACTLY ${totalPages} output pages.
+
+Instructions:
 1. Extract title and author.
 2. Write a one-paragraph summary of the entire book (100-150 words).
-3. Produce ONE output page for EVERY page in the original PDF. If the book has 200 pages, produce 200 output pages. Page 1 of output corresponds to page 1 of the book, and so on through to the very last page.
+3. Produce EXACTLY ${totalPages} output pages — one for every original page. Page 1 of output corresponds to page 1 of the book, and so on through to page ${totalPages}.
 4. STRICT WORD COUNT: Each page MUST be exactly 60-80 words. Not 40, not 100. Count your words carefully. If a page is under 60 or over 80 words, rewrite it until it fits.
 5. Narratively retell each page's content in the author's style. Preserve ALL content — every argument, example, character moment, subplot. Nothing is cut.
 6. Write in the author's authentic voice. Be vivid, sensory, emotionally resonant.
@@ -91,7 +108,10 @@ Respond with ONLY valid JSON:
     { "pageNumber": 1, "content": "string — EXACTLY 60-80 words" }
   ]
 }`,
-};
+  };
+
+  return prompts[format];
+}
 
 async function readPdfAsBase64(fileUri: string): Promise<string> {
   if (Platform.OS === 'web') {
@@ -130,14 +150,22 @@ export async function generateFormatFromPdf(
   onStatus?.('Reading PDF...');
   const base64 = await readPdfAsBase64(fileUri);
 
-  onStatus?.(`Generating ${format === 'mini' ? 'Essentials' : format === 'pro' ? 'Abridged' : 'Full'} pages...`);
+  onStatus?.('Counting pages...');
+  const totalPages = countPdfPages(base64);
+  if (totalPages === 0) throw new Error('Could not detect page count from PDF');
+
+  const expectedPages = format === 'mini' ? Math.max(Math.round(totalPages * 0.1), 1)
+    : format === 'pro' ? Math.max(Math.round(totalPages * 0.3), 1) : totalPages;
+  onStatus?.(`${totalPages} pages detected → generating ${expectedPages} ${format === 'mini' ? 'Essentials' : format === 'pro' ? 'Abridged' : 'Full'} pages...`);
+
+  const prompt = buildPrompt(format, totalPages);
 
   const body = {
     contents: [
       {
         parts: [
           { inlineData: { mimeType: 'application/pdf', data: base64 } },
-          { text: FORMAT_PROMPTS[format] },
+          { text: prompt },
         ],
       },
     ],
@@ -194,8 +222,16 @@ export async function generateFormatFromPdfOpenRouter(
   onStatus?.('Reading PDF...');
   const base64 = await readPdfAsBase64(fileUri);
 
+  onStatus?.('Counting pages...');
+  const totalPages = countPdfPages(base64);
+  if (totalPages === 0) throw new Error('Could not detect page count from PDF');
+
+  const expectedPages = format === 'mini' ? Math.max(Math.round(totalPages * 0.1), 1)
+    : format === 'pro' ? Math.max(Math.round(totalPages * 0.3), 1) : totalPages;
   const formatLabel = format === 'mini' ? 'Essentials' : format === 'pro' ? 'Abridged' : 'Full';
-  onStatus?.(`Generating ${formatLabel} pages via OpenRouter (${useModel})...`);
+  onStatus?.(`${totalPages} pages detected → generating ${expectedPages} ${formatLabel} pages via OpenRouter (${useModel})...`);
+
+  const prompt = buildPrompt(format, totalPages);
 
   const res = await fetch(OPENROUTER_ENDPOINT, {
     method: 'POST',
@@ -212,7 +248,7 @@ export async function generateFormatFromPdfOpenRouter(
           content: [
             {
               type: 'text',
-              text: FORMAT_PROMPTS[format],
+              text: prompt,
             },
             {
               type: 'image_url',
