@@ -8,6 +8,7 @@ import {
   TextInput,
   Modal,
   ScrollView,
+  Alert,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -72,37 +73,51 @@ export default function SocialScreen() {
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
-    if (query.length < 1) { setSearchResults([]); return; }
+    if (query.length < 4) { setSearchResults([]); return; }
     try {
       const res = await fetch(`${API_URL}/api/users/search?q=${query}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) setSearchResults(await res.json());
-    } catch { /* ignore */ }
+    } catch {
+      Alert.alert('Error', 'Could not search users. Check your connection.');
+    }
   };
 
   const sendRequest = async (userId: string) => {
     try {
-      await fetch(`${API_URL}/api/friends/requests`, {
+      const res = await fetch(`${API_URL}/api/friends/requests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ toUserId: userId }),
       });
-      setSentRequests((prev) => [...prev, userId]);
-    } catch { /* ignore */ }
+      if (res.ok) {
+        setSentRequests((prev) => [...prev, userId]);
+      } else {
+        Alert.alert('Error', 'Could not send friend request.');
+      }
+    } catch {
+      Alert.alert('Error', 'Could not send friend request. Check your connection.');
+    }
   };
 
   const respondToRequest = async (requestId: string, action: 'accept' | 'reject') => {
     try {
-      await fetch(`${API_URL}/api/friends/requests/${requestId}`, {
+      const res = await fetch(`${API_URL}/api/friends/requests/${requestId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ action }),
       });
-      setRequests((prev) => prev.filter((r) => r._id !== requestId));
-      const r = await fetch(`${API_URL}/api/friends`, { headers: { Authorization: `Bearer ${token}` } });
-      if (r.ok) setFriends(await r.json());
-    } catch { /* ignore */ }
+      if (res.ok) {
+        setRequests((prev) => prev.filter((r) => r._id !== requestId));
+        const r = await fetch(`${API_URL}/api/friends`, { headers: { Authorization: `Bearer ${token}` } });
+        if (r.ok) setFriends(await r.json());
+      } else {
+        Alert.alert('Error', `Could not ${action} request.`);
+      }
+    } catch {
+      Alert.alert('Error', 'Something went wrong. Check your connection.');
+    }
   };
 
   const openChat = async (friendId: string, username: string) => {
@@ -114,8 +129,12 @@ export default function SocialScreen() {
       if (res.ok) {
         const conv = await res.json();
         (router as any).push({ pathname: '/chat', params: { id: conv._id, username } });
+      } else {
+        Alert.alert('Error', 'Could not open chat.');
       }
-    } catch { /* ignore */ }
+    } catch {
+      Alert.alert('Error', 'Could not open chat. Check your connection.');
+    }
   };
 
   const initials = (name?: string) => (name?.substring(0, 2) || '?').toUpperCase();
@@ -255,7 +274,7 @@ export default function SocialScreen() {
               keyExtractor={(item) => item._id}
               ListEmptyComponent={
                 <Text style={styles.emptyList}>
-                  {searchQuery.length >= 1 ? 'No users found' : 'Type a username to search'}
+                  {searchQuery.length >= 4 ? 'No users found' : 'Type at least 4 characters to search'}
                 </Text>
               }
               renderItem={({ item }) => {
