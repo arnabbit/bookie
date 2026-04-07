@@ -74,11 +74,17 @@ export default function ChatScreen() {
         if (convRes.ok) {
           const convs = await convRes.json();
           const conv = convs.find((c: any) => c._id === conversationId);
+          console.log('DEBUG chat conv participants:', JSON.stringify(conv?.participants));
+          console.log('DEBUG chat user.id:', user?.id);
           const other = conv?.participants?.find((p: any) => p._id !== user?.id);
+          console.log('DEBUG chat other user:', JSON.stringify(other));
           if (other) {
             otherUserIdRef.current = other._id;
             setOtherOnline(!!other.isOnline);
             setOtherLastSeen(other.lastSeen || null);
+            console.log('DEBUG chat otherOnline:', other.isOnline, 'lastSeen:', other.lastSeen);
+          } else {
+            console.log('DEBUG chat: no other participant found');
           }
           const readAt = conv?.readBy?.[user?.id || ''];
           if (readAt && msgs.length > 0) {
@@ -107,9 +113,11 @@ export default function ChatScreen() {
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     });
     socket.on('user-online', (uid: string) => {
+      console.log('DEBUG socket user-online:', uid, 'otherRef:', otherUserIdRef.current);
       if (uid === otherUserIdRef.current) setOtherOnline(true);
     });
     socket.on('user-offline', (uid: string) => {
+      console.log('DEBUG socket user-offline:', uid, 'otherRef:', otherUserIdRef.current);
       if (uid === otherUserIdRef.current) {
         setOtherOnline(false);
         setOtherLastSeen(new Date().toISOString());
