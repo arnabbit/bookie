@@ -95,13 +95,16 @@ io.on('connection', (socket) => {
         sharedBookPage,
       });
 
-      // Update conversation preview
+      // Update conversation preview + mark read for sender
       const preview = type === 'text' ? content : '[Shared a book page]';
-      await Conversation.findByIdAndUpdate(conversationId, {
-        lastMessage: message._id,
-        lastMessagePreview: preview,
-        updatedAt: new Date(),
-      });
+      const conv = await Conversation.findById(conversationId);
+      if (conv) {
+        conv.lastMessage = message._id;
+        conv.lastMessagePreview = preview;
+        conv.updatedAt = new Date();
+        conv.readBy.set(userId, new Date());
+        await conv.save();
+      }
 
       const populatedMessage = await Message.findById(message._id)
         .populate('sender', 'username avatar');
@@ -117,9 +120,11 @@ io.on('connection', (socket) => {
   socket.on('mark-read', async ({ conversationId }) => {
     if (!userId) return;
     try {
-      await Conversation.findByIdAndUpdate(conversationId, {
-        [`readBy.${userId}`]: new Date(),
-      });
+      const conv = await Conversation.findById(conversationId);
+      if (conv) {
+        conv.readBy.set(userId, new Date());
+        await conv.save();
+      }
     } catch (err) {
       console.error('Socket mark-read error:', err.message);
     }
