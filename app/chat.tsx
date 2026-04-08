@@ -398,7 +398,7 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
   },
 
-  bubble: { borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10, minWidth: 60 },
+  bubble: { borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10, minWidth: 60, flexShrink: 1 },
   bubbleMine: {
     backgroundColor: colors.primaryContainer,
     borderBottomRightRadius: 4,
