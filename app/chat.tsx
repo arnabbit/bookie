@@ -289,9 +289,6 @@ export default function ChatScreen() {
 
       {/* Input bar */}
       <View style={styles.inputBar}>
-        <TouchableOpacity style={styles.bookBtn} onPress={openBookPicker}>
-          <Ionicons name="book-outline" size={22} color={colors.onSurfaceVariant} />
-        </TouchableOpacity>
         <View style={styles.inputWrap}>
           <TextInput
             style={styles.textInput}
