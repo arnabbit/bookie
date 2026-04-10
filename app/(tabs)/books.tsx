@@ -298,7 +298,7 @@ export default function BooksScreen() {
                           styles.formatOptionPages,
                           available && { color: colors.tertiary },
                         ]}>
-                          {available ? (f === 'ultra' ? 'COMPLETE' : `${pages} PAGES`) : 'N/A'}
+                          {available ? `${pages} PAGES` : 'N/A'}
                         </Text>
                       </View>
                     </TouchableOpacity>
