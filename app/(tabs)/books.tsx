@@ -102,6 +102,8 @@ export default function BooksScreen() {
         setSelectedBook(book);
         if (params.format && ['mini', 'pro', 'ultra'].includes(params.format)) {
           setSelectedFormat(params.format as BookFormat);
+        } else {
+          setSelectedFormat(book.availableFormats.includes('mini') ? 'mini' : null);
         }
       }
     }
@@ -209,7 +211,7 @@ export default function BooksScreen() {
   const renderCatalogueItem = ({ item }: { item: CatalogueBook }) => (
     <TouchableOpacity
       style={styles.catalogueCard}
-      onPress={() => { setSelectedBook(item); setSelectedFormat(null); }}
+      onPress={() => { setSelectedBook(item); setSelectedFormat(item.availableFormats.includes('mini') ? 'mini' : null); }}
       activeOpacity={0.7}
     >
       {item.coverUrl ? (
