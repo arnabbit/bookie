@@ -166,7 +166,7 @@ ${batchText}`;
 
 // ---------- Retry helper ----------
 
-async function callWithRetry(fn: () => Promise<string>): Promise<string> {
+async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await fn();
@@ -178,6 +178,15 @@ async function callWithRetry(fn: () => Promise<string>): Promise<string> {
     }
   }
   throw new Error('Unreachable');
+}
+
+async function callAndParse(callApi: TextCallFn, prompt: string): Promise<any> {
+  const raw = await callApi(prompt);
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`Malformed JSON response: ${(e as Error).message} — preview: ${raw.substring(0, 200)}`);
+  }
 }
 
 // ---------- Batch orchestration ----------
@@ -201,8 +210,7 @@ async function generateInBatches(
     onStatus?.(`Generating ${expectedPages} ${label} pages...`);
     const bookText = ocrPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
     const prompt = buildPrompt(format, totalPdfPages, bookText);
-    const raw = await callWithRetry(() => callApi(prompt));
-    const parsed = JSON.parse(raw);
+    const parsed = await callWithRetry(() => callAndParse(callApi, prompt));
     if (!parsed.pages?.length) throw new Error('No pages returned');
 
     return {
@@ -246,8 +254,7 @@ async function generateInBatches(
       text,
     );
 
-    const raw = await callWithRetry(() => callApi(prompt));
-    const parsed = JSON.parse(raw);
+    const parsed = await callWithRetry(() => callAndParse(callApi, prompt));
 
     if (b === 0) {
       title = parsed.title || '';
