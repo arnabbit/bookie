@@ -164,6 +164,159 @@ ${jsonFormat}
 ${batchText}`;
 }
 
+// ---------- Validator + single-page regen ----------
+
+interface PageSlice {
+  pageNumber: number;
+  sliceStart: number;
+  sliceEnd: number;
+  sliceText: string;
+}
+
+interface FlaggedPage {
+  pageNumber: number;
+  issue: string;
+}
+
+function buildValidatorPrompt(pages: GeneratedPage[], slices: PageSlice[]): string {
+  const items = pages
+    .map((p) => {
+      const s = slices.find((x) => x.pageNumber === p.pageNumber);
+      if (!s) return '';
+      return `--- Output page ${p.pageNumber} (source: PDF pages ${s.sliceStart}-${s.sliceEnd}) ---
+SOURCE:
+${s.sliceText}
+
+GENERATED:
+${p.content}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+
+  return `You are a faithfulness validator. For each generated page, check it against its source PDF pages.
+
+Flag a page as INVALID only if:
+- It introduces events, characters, places, or factual details NOT present in the source.
+- It summarizes content from a clearly different section of the book (source/generated mismatch).
+- It drastically misrepresents the source's meaning.
+
+Do NOT flag for:
+- Stylistic rephrasing or condensation (expected).
+- Selective emphasis on key ideas.
+- Word count deviations.
+
+Be conservative — only flag clear morphing or fabrication.
+
+Respond with ONLY valid JSON:
+{ "flagged": [{ "pageNumber": <number>, "issue": "<short description>" }] }
+
+If nothing is wrong, return { "flagged": [] }.
+
+${items}`;
+}
+
+function buildRegenPrompt(format: FormatType, slice: PageSlice, issue: string): string {
+  return `You are regenerating a single page that failed a faithfulness check.
+
+ISSUE REPORTED: ${issue}
+
+Regenerate the page strictly from the source below. Do not introduce anything not in the source.
+
+STRICT WORD COUNT: exactly 60-80 words.
+
+${qualityRules(format)}
+
+Respond with ONLY valid JSON:
+{ "content": "string — EXACTLY 60-80 words" }
+
+--- SOURCE (PDF pages ${slice.sliceStart}-${slice.sliceEnd}) ---
+${slice.sliceText}`;
+}
+
+function computePageSlices(
+  ocrPages: OcrPage[],
+  pages: GeneratedPage[],
+  pdfStart: number,
+  pdfEnd: number,
+): PageSlice[] {
+  const count = pages.length;
+  if (count === 0) return [];
+  const perPage = (pdfEnd - pdfStart + 1) / count;
+  return pages.map((p, i) => {
+    const sliceStart = pdfStart + Math.floor(i * perPage);
+    const sliceEnd = Math.max(sliceStart, pdfStart + Math.floor((i + 1) * perPage) - 1);
+    const slicePages = ocrPages.filter((op) => op.pageNum >= sliceStart && op.pageNum <= sliceEnd);
+    const sliceText = slicePages
+      .map((op) => `Page ${op.pageNum} start\n${op.text}\nPage ${op.pageNum} end`)
+      .join('\n\n');
+    return { pageNumber: p.pageNumber, sliceStart, sliceEnd, sliceText };
+  });
+}
+
+function countWords(text: string): number {
+  return (text.trim().match(/\S+/g) || []).length;
+}
+
+const WORD_COUNT_MAX = 100;
+const VALIDATOR_TEMP = 0.2;
+
+async function validateAndRepair(
+  callApi: TextCallFn,
+  format: FormatType,
+  pages: GeneratedPage[],
+  slices: PageSlice[],
+  onStatus?: (msg: string) => void,
+): Promise<GeneratedPage[]> {
+  const flaggedMap = new Map<number, string>();
+
+  // Deterministic: flag any page that exceeds word-count tolerance.
+  for (const p of pages) {
+    const wc = countWords(p.content);
+    if (wc > WORD_COUNT_MAX) {
+      flaggedMap.set(p.pageNumber, `word count too high: ${wc} words (cap ${WORD_COUNT_MAX})`);
+    }
+  }
+
+  // LLM judge for faithfulness.
+  try {
+    const parsed = await callWithRetry(() =>
+      callAndParse(callApi, buildValidatorPrompt(pages, slices), { temperature: VALIDATOR_TEMP }),
+    );
+    const llmFlags: FlaggedPage[] = Array.isArray(parsed?.flagged)
+      ? parsed.flagged.filter((f: any) => typeof f?.pageNumber === 'number')
+      : [];
+    for (const f of llmFlags) {
+      if (!flaggedMap.has(f.pageNumber)) {
+        flaggedMap.set(f.pageNumber, f.issue || 'morphed content');
+      }
+    }
+  } catch (e) {
+    console.warn('Validator pass failed, using word-count flags only', e);
+  }
+
+  if (flaggedMap.size === 0) return pages;
+
+  const result = [...pages];
+  for (const [pageNumber, issue] of flaggedMap) {
+    const slice = slices.find((s) => s.pageNumber === pageNumber);
+    const idx = result.findIndex((p) => p.pageNumber === pageNumber);
+    if (!slice || idx < 0) continue;
+    onStatus?.(`Repairing page ${pageNumber} — ${issue.substring(0, 60)}`);
+    try {
+      const parsed = await callWithRetry(() =>
+        callAndParse(callApi, buildRegenPrompt(format, slice, issue), { temperature: VALIDATOR_TEMP }),
+      );
+      const content = parsed?.content;
+      if (typeof content === 'string' && content.trim()) {
+        result[idx] = { ...result[idx], content };
+      }
+    } catch (e) {
+      console.warn(`Regen failed for page ${pageNumber}, keeping original`, e);
+    }
+  }
+  return result;
+}
+
 // ---------- Retry helper ----------
 
 async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -180,8 +333,8 @@ async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw new Error('Unreachable');
 }
 
-async function callAndParse(callApi: TextCallFn, prompt: string): Promise<any> {
-  const raw = await callApi(prompt);
+async function callAndParse(callApi: TextCallFn, prompt: string, opts?: TextCallOpts): Promise<any> {
+  const raw = await callApi(prompt, opts);
   try {
     return JSON.parse(raw);
   } catch (e) {
@@ -191,8 +344,12 @@ async function callAndParse(callApi: TextCallFn, prompt: string): Promise<any> {
 
 // ---------- Batch orchestration ----------
 
+interface TextCallOpts {
+  temperature?: number;
+}
+
 interface TextCallFn {
-  (prompt: string): Promise<string>;
+  (prompt: string, opts?: TextCallOpts): Promise<string>;
 }
 
 async function generateInBatches(
@@ -213,14 +370,20 @@ async function generateInBatches(
     const parsed = await callWithRetry(() => callAndParse(callApi, prompt));
     if (!parsed.pages?.length) throw new Error('No pages returned');
 
+    let pages: GeneratedPage[] = parsed.pages.slice(0, expectedPages).map((p: any, i: number) => ({
+      pageNumber: p.pageNumber ?? i + 1,
+      content: p.content || p.summary || '',
+    }));
+
+    onStatus?.('Validating pages against source...');
+    const slices = computePageSlices(ocrPages, pages, 1, totalPdfPages);
+    pages = await validateAndRepair(callApi, format, pages, slices, onStatus);
+
     return {
       title: parsed.title || '',
       author: parsed.author || '',
       summary: parsed.summary || '',
-      pages: parsed.pages.slice(0, expectedPages).map((p: any, i: number) => ({
-        pageNumber: p.pageNumber ?? i + 1,
-        content: p.content || p.summary || '',
-      })),
+      pages,
     };
   }
 
@@ -262,10 +425,14 @@ async function generateInBatches(
       summary = parsed.summary || '';
     }
 
-    const pages: GeneratedPage[] = (parsed.pages || []).slice(0, count).map((p: any, i: number) => ({
+    let pages: GeneratedPage[] = (parsed.pages || []).slice(0, count).map((p: any, i: number) => ({
       pageNumber: p.pageNumber ?? startPage + i,
       content: p.content || p.summary || '',
     }));
+
+    onStatus?.(`Validating batch ${b + 1}/${batches.length}...`);
+    const slices = computePageSlices(ocrPages, pages, pdfStart, pdfEnd);
+    pages = await validateAndRepair(callApi, format, pages, slices, onStatus);
 
     allPages.push(...pages);
   }
@@ -276,12 +443,12 @@ async function generateInBatches(
 // ---------- API call factories ----------
 
 function makeGeminiCall(apiKey: string): TextCallFn {
-  return async (prompt: string): Promise<string> => {
+  return async (prompt: string, opts?: TextCallOpts): Promise<string> => {
     const body = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
         responseMimeType: 'application/json',
-        temperature: 0.7,
+        temperature: opts?.temperature ?? 0.7,
       },
     };
 
@@ -304,7 +471,7 @@ function makeGeminiCall(apiKey: string): TextCallFn {
 }
 
 function makeOpenRouterCall(apiKey: string, model: string): TextCallFn {
-  return async (prompt: string): Promise<string> => {
+  return async (prompt: string, opts?: TextCallOpts): Promise<string> => {
     const res = await fetch(OPENROUTER_ENDPOINT, {
       method: 'POST',
       headers: {
@@ -315,7 +482,7 @@ function makeOpenRouterCall(apiKey: string, model: string): TextCallFn {
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
+        temperature: opts?.temperature ?? 0.7,
         response_format: { type: 'json_object' },
       }),
     });
@@ -373,6 +540,47 @@ export async function generateFormatFromPdfOpenRouter(
   const totalPages = ocrPages.length;
   const expected = computeExpectedPages(format, totalPages);
   onStatus?.(`${totalPages} pages extracted → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
+
+  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), onStatus);
+}
+
+// Generate mini/pro from an existing Full (ultra) version — skips OCR.
+function fullPagesToOcr(fullPages: { pageNumber: number; content: string }[]): OcrPage[] {
+  return fullPages.map((p) => ({ pageNum: p.pageNumber, text: p.content }));
+}
+
+export async function generateFormatFromFull(
+  fullPages: { pageNumber: number; content: string }[],
+  apiKey: string,
+  format: FormatType,
+  onStatus?: (msg: string) => void,
+): Promise<GenerationResult> {
+  if (!apiKey) throw new Error('Gemini API key not available');
+  if (format === 'ultra') throw new Error('Cannot generate Full from Full');
+  if (!fullPages?.length) throw new Error('Full version has no pages');
+
+  const ocrPages = fullPagesToOcr(fullPages);
+  const expected = computeExpectedPages(format, ocrPages.length);
+  onStatus?.(`Using Full (${ocrPages.length} pages) → generating ${expected} ${formatLabel(format)} pages...`);
+
+  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), onStatus);
+}
+
+export async function generateFormatFromFullOpenRouter(
+  fullPages: { pageNumber: number; content: string }[],
+  apiKey: string,
+  format: FormatType,
+  onStatus?: (msg: string) => void,
+  model?: string,
+): Promise<GenerationResult> {
+  if (!apiKey) throw new Error('OpenRouter API key not available');
+  if (format === 'ultra') throw new Error('Cannot generate Full from Full');
+  if (!fullPages?.length) throw new Error('Full version has no pages');
+
+  const useModel = model || OPENROUTER_MODEL;
+  const ocrPages = fullPagesToOcr(fullPages);
+  const expected = computeExpectedPages(format, ocrPages.length);
+  onStatus?.(`Using Full (${ocrPages.length} pages) → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
 
   return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), onStatus);
 }

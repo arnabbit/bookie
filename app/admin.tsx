@@ -19,7 +19,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { API_URL, useAuth } from '@/lib/AuthContext';
 import { colors, fonts, radius, shadows, FORMAT_DISPLAY } from '@/lib/theme';
-import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, GeneratedPage } from '@/lib/geminiAdmin';
+import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage } from '@/lib/geminiAdmin';
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
 type Screen = 'list' | 'editor';
@@ -279,6 +279,37 @@ export default function AdminScreen() {
     }
   };
 
+  // Generate mini/pro from existing Full (skips PDF upload)
+  const generateFromFull = async (useOpenRouter: boolean, model?: string) => {
+    if (!editingBook) return;
+    const fullPages = editingBook.formats.ultra || [];
+    if (!fullPages.length) { Alert.alert('Error', 'No Full version exists yet'); return; }
+    if (activeFormat === 'ultra') { Alert.alert('Error', 'Switch to Essentials or Abridged first'); return; }
+    const key = useOpenRouter ? openRouterKey : geminiKey;
+    if (!key) { Alert.alert('Error', `Server ${useOpenRouter ? 'OPENROUTER' : 'GEMINI'}_API_KEY not configured`); return; }
+
+    try {
+      setGenerating(true);
+      setGenStatus('Starting from Full...');
+
+      const gen = useOpenRouter
+        ? await generateFormatFromFullOpenRouter(fullPages, openRouterKey, activeFormat, setGenStatus, model)
+        : await generateFormatFromFull(fullPages, geminiKey, activeFormat, setGenStatus);
+
+      if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
+      if (!metaTitle && gen.title) setMetaTitle(gen.title);
+      if (!metaAuthor && gen.author) setMetaAuthor(gen.author);
+
+      setPreviewPages(gen.pages);
+      setGenStatus(`Generated ${gen.pages.length} pages from Full. Review and save.`);
+    } catch (err: any) {
+      Alert.alert('Generation Failed', err.message || 'Unknown error');
+      setGenStatus('');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   // Save generated/edited pages to server
   const savePages = async (pages: { pageNumber: number; content: string }[]) => {
     if (!editingBook) return;
@@ -530,6 +561,37 @@ export default function AdminScreen() {
                 <Text style={s.actionBtnText}>Add Page</Text>
               </TouchableOpacity>
             </View>
+
+            {activeFormat !== 'ultra' && (editingBook?.formats.ultra?.length ?? 0) > 0 && (
+              <View style={[s.actionRow, { marginTop: 8 }]}>
+                <TouchableOpacity
+                  style={[s.actionBtn, generating && { opacity: 0.5 }]}
+                  onPress={() => generateFromFull(false)}
+                  disabled={generating}
+                >
+                  <Ionicons name="git-branch" size={18} color={colors.tertiary} />
+                  <Text style={s.actionBtnText}>From Full (Gemini)</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[s.actionBtn, generating && { opacity: 0.5 }]}
+                  onPress={() => generateFromFull(true)}
+                  disabled={generating}
+                >
+                  <Ionicons name="git-branch" size={18} color={colors.tertiary} />
+                  <Text style={s.actionBtnText}>From Full (OpenRouter)</Text>
+                </TouchableOpacity>
+                {showCustomModel && customModel.trim().length > 0 && (
+                  <TouchableOpacity
+                    style={[s.actionBtn, generating && { opacity: 0.5 }]}
+                    onPress={() => generateFromFull(true, customModel.trim())}
+                    disabled={generating}
+                  >
+                    <Ionicons name="git-branch" size={18} color={colors.tertiary} />
+                    <Text style={s.actionBtnText}>From Full ({customModel.split('/').pop()})</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
 
             {showCustomModel && (
               <View style={s.customModelRow}>
