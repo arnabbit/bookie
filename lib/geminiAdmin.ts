@@ -6,6 +6,22 @@ const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = 'google/gemini-3.1-flash-lite-preview';
 const BATCH_SIZE = 20;
 const MAX_RETRIES = 3;
+const REQUEST_TIMEOUT_MS = 60_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s — retrying`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface GeneratedPage {
   pageNumber: number;
@@ -452,7 +468,7 @@ function makeGeminiCall(apiKey: string): TextCallFn {
       },
     };
 
-    const res = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+    const res = await fetchWithTimeout(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -472,7 +488,7 @@ function makeGeminiCall(apiKey: string): TextCallFn {
 
 function makeOpenRouterCall(apiKey: string, model: string): TextCallFn {
   return async (prompt: string, opts?: TextCallOpts): Promise<string> => {
-    const res = await fetch(OPENROUTER_ENDPOINT, {
+    const res = await fetchWithTimeout(OPENROUTER_ENDPOINT, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
