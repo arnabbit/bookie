@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -19,7 +19,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { API_URL, useAuth } from '@/lib/AuthContext';
 import { colors, fonts, radius, shadows, FORMAT_DISPLAY } from '@/lib/theme';
-import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage } from '@/lib/geminiAdmin';
+import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage, cancelCurrentBatchRequest } from '@/lib/geminiAdmin';
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
 type Screen = 'list' | 'editor';
@@ -103,6 +103,15 @@ export default function AdminScreen() {
   useEffect(() => {
     (async () => { setLoading(true); await fetchBooks(); setLoading(false); })();
   }, [fetchBooks]);
+
+  // Abort in-flight generation on unmount so it doesn't run in the background.
+  const generatingRef = useRef(false);
+  useEffect(() => { generatingRef.current = generating; }, [generating]);
+  useEffect(() => {
+    return () => {
+      if (generatingRef.current) cancelCurrentBatchRequest();
+    };
+  }, []);
 
   // Open book editor
   const openBook = async (bookId: string) => {
@@ -616,6 +625,16 @@ export default function AdminScreen() {
               <View style={s.genStatus}>
                 <ActivityIndicator size="small" color={colors.tertiary} />
                 <Text style={s.genStatusText}>{genStatus}</Text>
+                <TouchableOpacity
+                  style={s.retryBatchBtn}
+                  onPress={() => {
+                    const ok = cancelCurrentBatchRequest();
+                    if (ok) setGenStatus((prev) => `Retrying... ${prev}`);
+                  }}
+                >
+                  <Ionicons name="refresh" size={14} color={colors.onPrimary} />
+                  <Text style={s.retryBatchBtnText}>Retry</Text>
+                </TouchableOpacity>
               </View>
             )}
 
@@ -843,6 +862,16 @@ const s = StyleSheet.create({
     borderRadius: 10,
   },
   genStatusText: { fontFamily: fonts.body, fontSize: 13, color: colors.onSurfaceVariant, flex: 1 },
+  retryBatchBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.tertiary,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  retryBatchBtnText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.onTertiary },
 
   previewBanner: {
     marginTop: 12,

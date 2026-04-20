@@ -8,18 +8,49 @@ const BATCH_SIZE = 20;
 const MAX_RETRIES = 3;
 const REQUEST_TIMEOUT_MS = 60_000;
 
+// Module-level handle so the UI can manually abort the in-flight batch request.
+let currentInflightController: AbortController | null = null;
+// Module-level handle to wake an in-progress backoff sleep between retries.
+let skipBackoffResolve: (() => void) | null = null;
+
+export function cancelCurrentBatchRequest(): boolean {
+  let acted = false;
+  if (currentInflightController) {
+    console.warn('[geminiAdmin] manual retry — aborting current request');
+    try { currentInflightController.abort(); } catch {}
+    acted = true;
+  }
+  if (skipBackoffResolve) {
+    console.warn('[geminiAdmin] manual retry — skipping backoff sleep');
+    try { skipBackoffResolve(); } catch {}
+    skipBackoffResolve = null;
+    acted = true;
+  }
+  return acted;
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  currentInflightController = controller;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try { controller.abort(); } catch {}
+      console.warn(`[fetchWithTimeout] aborting after ${timeoutMs}ms: ${url}`);
+      reject(new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s — retrying`));
+    }, timeoutMs);
+  });
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } catch (e: any) {
-    if (e?.name === 'AbortError') {
-      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s — retrying`);
-    }
-    throw e;
+    const fetchPromise = fetch(url, { ...init, signal: controller.signal }).catch((e: any) => {
+      if (e?.name === 'AbortError') {
+        throw new Error(`Request aborted — retrying`);
+      }
+      throw e;
+    });
+    return await Promise.race([fetchPromise, timeoutPromise]);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
+    if (currentInflightController === controller) currentInflightController = null;
   }
 }
 
@@ -343,7 +374,18 @@ async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
       if (attempt === MAX_RETRIES) throw e;
       const delay = Math.min(2000 * Math.pow(2, attempt - 1), 15000);
       console.warn(`Batch attempt ${attempt} failed, retrying in ${delay}ms...`, e);
-      await new Promise((r) => setTimeout(r, delay));
+      await new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const resolver = () => {
+          if (timer) clearTimeout(timer);
+          resolve();
+        };
+        timer = setTimeout(() => {
+          if (skipBackoffResolve === resolver) skipBackoffResolve = null;
+          resolve();
+        }, delay);
+        skipBackoffResolve = resolver;
+      });
     }
   }
   throw new Error('Unreachable');
