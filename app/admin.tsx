@@ -75,15 +75,32 @@ export default function AdminScreen() {
   // Custom OpenRouter model
   const [customModel, setCustomModel] = useState('google/gemini-3.1-flash-lite-preview');
   const [showCustomModel, setShowCustomModel] = useState(false);
+  // Error popup
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+  const showError = (msg: string) => setErrorMsg(msg || 'Unknown error');
+
+  // Throw on non-ok response with server message if available.
+  const ensureOk = async (res: Response, label: string) => {
+    if (res.ok) return;
+    let detail = '';
+    try {
+      const text = await res.text();
+      try { detail = JSON.parse(text)?.error || JSON.parse(text)?.message || text; }
+      catch { detail = text; }
+    } catch {}
+    throw new Error(`${label} failed (${res.status})${detail ? `: ${detail}` : ''}`);
+  };
 
   // Fetch books list
   const fetchBooks = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/api/admin/books`, { headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) setBooks(await res.json());
-    } catch {}
+      await ensureOk(res, 'Load books');
+      setBooks(await res.json());
+    } catch (e: any) { showError(e.message); }
   }, [token]);
 
   // Fetch API keys
@@ -91,12 +108,14 @@ export default function AdminScreen() {
     (async () => {
       try {
         const res = await fetch(`${API_URL}/api/admin/gemini-key`, { headers: { Authorization: `Bearer ${token}` } });
-        if (res.ok) { const d = await res.json(); setGeminiKey(d.key); }
-      } catch {}
+        await ensureOk(res, 'Fetch Gemini key');
+        const d = await res.json(); setGeminiKey(d.key);
+      } catch (e: any) { showError(e.message); }
       try {
         const res = await fetch(`${API_URL}/api/admin/openrouter-key`, { headers: { Authorization: `Bearer ${token}` } });
-        if (res.ok) { const d = await res.json(); setOpenRouterKey(d.key); }
-      } catch {}
+        await ensureOk(res, 'Fetch OpenRouter key');
+        const d = await res.json(); setOpenRouterKey(d.key);
+      } catch (e: any) { showError(e.message); }
     })();
   }, [token]);
 
@@ -117,18 +136,17 @@ export default function AdminScreen() {
   const openBook = async (bookId: string) => {
     try {
       const res = await fetch(`${API_URL}/api/admin/books/${bookId}`, { headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) {
-        const book = await res.json();
-        setEditingBook(book);
-        setMetaTitle(book.title);
-        setMetaAuthor(book.author);
-        setMetaSummary(book.summary || '');
-        setMetaCoverUrl(book.coverUrl || '');
-        setActiveFormat('mini');
-        setPreviewPages(null);
-        setScreen('editor');
-      }
-    } catch {}
+      await ensureOk(res, 'Open book');
+      const book = await res.json();
+      setEditingBook(book);
+      setMetaTitle(book.title);
+      setMetaAuthor(book.author);
+      setMetaSummary(book.summary || '');
+      setMetaCoverUrl(book.coverUrl || '');
+      setActiveFormat('mini');
+      setPreviewPages(null);
+      setScreen('editor');
+    } catch (e: any) { showError(e.message); }
   };
 
   // Create new book
@@ -140,15 +158,14 @@ export default function AdminScreen() {
         headers,
         body: JSON.stringify({ title: newTitle.trim(), author: newAuthor.trim() }),
       });
-      if (res.ok) {
-        const book = await res.json();
-        setShowNewBook(false);
-        setNewTitle('');
-        setNewAuthor('');
-        await fetchBooks();
-        openBook(book._id);
-      }
-    } catch {}
+      await ensureOk(res, 'Create book');
+      const book = await res.json();
+      setShowNewBook(false);
+      setNewTitle('');
+      setNewAuthor('');
+      await fetchBooks();
+      openBook(book._id);
+    } catch (e: any) { showError(e.message); }
   };
 
   // Save metadata
@@ -161,21 +178,23 @@ export default function AdminScreen() {
         headers,
         body: JSON.stringify({ title: metaTitle, author: metaAuthor, summary: metaSummary, coverUrl: metaCoverUrl }),
       });
-      if (res.ok) {
-        const updated = await res.json();
-        setEditingBook((prev) => prev ? { ...prev, ...updated } : prev);
-      }
-    } catch {} finally { setSaving(false); }
+      await ensureOk(res, 'Save details');
+      const updated = await res.json();
+      setEditingBook((prev) => prev ? { ...prev, ...updated } : prev);
+    } catch (e: any) { showError(e.message); } finally { setSaving(false); }
   };
 
   // Delete book
   const deleteBook = async () => {
     if (!editingBook) return;
     const doDelete = async () => {
-      await fetch(`${API_URL}/api/admin/books/${editingBook._id}`, { method: 'DELETE', headers });
-      setScreen('list');
-      setEditingBook(null);
-      fetchBooks();
+      try {
+        const res = await fetch(`${API_URL}/api/admin/books/${editingBook._id}`, { method: 'DELETE', headers });
+        await ensureOk(res, 'Delete book');
+        setScreen('list');
+        setEditingBook(null);
+        fetchBooks();
+      } catch (e: any) { showError(e.message); }
     };
     if (Platform.OS === 'web') {
       if (window.confirm(`Delete "${editingBook.title}"?`)) doDelete();
@@ -189,14 +208,14 @@ export default function AdminScreen() {
 
   // Generate with Gemini
   const generateWithGemini = async () => {
-    if (!geminiKey) { Alert.alert('Error', 'Server GEMINI_API_KEY not configured'); return; }
+    if (!geminiKey) { showError('Server GEMINI_API_KEY not configured'); return; }
     try {
       const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
       if (result.canceled) return;
       const file = result.assets[0];
       if (!file) return;
       if (file.size && file.size > 30 * 1024 * 1024) {
-        Alert.alert('Error', 'PDF too large (max 30MB)');
+        showError('PDF too large (max 30MB)');
         return;
       }
 
@@ -216,7 +235,7 @@ export default function AdminScreen() {
       setPreviewPages(gen.pages);
       setGenStatus(`Generated ${gen.pages.length} pages. Review and save.`);
     } catch (err: any) {
-      Alert.alert('Generation Failed', err.message || 'Unknown error');
+      showError(`Generation Failed: ${err.message || 'Unknown error'}`);
       setGenStatus('');
     } finally {
       setGenerating(false);
@@ -225,14 +244,14 @@ export default function AdminScreen() {
 
   // Generate with Gemini via OpenRouter
   const generateWithOpenRouter = async () => {
-    if (!openRouterKey) { Alert.alert('Error', 'Server OPENROUTER_API_KEY not configured'); return; }
+    if (!openRouterKey) { showError('Server OPENROUTER_API_KEY not configured'); return; }
     try {
       const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
       if (result.canceled) return;
       const file = result.assets[0];
       if (!file) return;
       if (file.size && file.size > 30 * 1024 * 1024) {
-        Alert.alert('Error', 'PDF too large (max 30MB)');
+        showError('PDF too large (max 30MB)');
         return;
       }
 
@@ -248,7 +267,7 @@ export default function AdminScreen() {
       setPreviewPages(gen.pages);
       setGenStatus(`Generated ${gen.pages.length} pages. Review and save.`);
     } catch (err: any) {
-      Alert.alert('Generation Failed', err.message || 'Unknown error');
+      showError(`Generation Failed: ${err.message || 'Unknown error'}`);
       setGenStatus('');
     } finally {
       setGenerating(false);
@@ -257,15 +276,15 @@ export default function AdminScreen() {
 
   // Generate with custom OpenRouter model
   const generateWithCustomOpenRouter = async () => {
-    if (!openRouterKey) { Alert.alert('Error', 'Server OPENROUTER_API_KEY not configured'); return; }
-    if (!customModel.trim()) { Alert.alert('Error', 'Enter a model name'); return; }
+    if (!openRouterKey) { showError('Server OPENROUTER_API_KEY not configured'); return; }
+    if (!customModel.trim()) { showError('Enter a model name'); return; }
     try {
       const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
       if (result.canceled) return;
       const file = result.assets[0];
       if (!file) return;
       if (file.size && file.size > 30 * 1024 * 1024) {
-        Alert.alert('Error', 'PDF too large (max 30MB)');
+        showError('PDF too large (max 30MB)');
         return;
       }
 
@@ -281,7 +300,7 @@ export default function AdminScreen() {
       setPreviewPages(gen.pages);
       setGenStatus(`Generated ${gen.pages.length} pages. Review and save.`);
     } catch (err: any) {
-      Alert.alert('Generation Failed', err.message || 'Unknown error');
+      showError(`Generation Failed: ${err.message || 'Unknown error'}`);
       setGenStatus('');
     } finally {
       setGenerating(false);
@@ -292,10 +311,10 @@ export default function AdminScreen() {
   const generateFromFull = async (useOpenRouter: boolean, model?: string) => {
     if (!editingBook) return;
     const fullPages = editingBook.formats.ultra || [];
-    if (!fullPages.length) { Alert.alert('Error', 'No Full version exists yet'); return; }
-    if (activeFormat === 'ultra') { Alert.alert('Error', 'Switch to Essentials or Abridged first'); return; }
+    if (!fullPages.length) { showError('No Full version exists yet'); return; }
+    if (activeFormat === 'ultra') { showError('Switch to Essentials or Abridged first'); return; }
     const key = useOpenRouter ? openRouterKey : geminiKey;
-    if (!key) { Alert.alert('Error', `Server ${useOpenRouter ? 'OPENROUTER' : 'GEMINI'}_API_KEY not configured`); return; }
+    if (!key) { showError(`Server ${useOpenRouter ? 'OPENROUTER' : 'GEMINI'}_API_KEY not configured`); return; }
 
     try {
       setGenerating(true);
@@ -312,7 +331,7 @@ export default function AdminScreen() {
       setPreviewPages(gen.pages);
       setGenStatus(`Generated ${gen.pages.length} pages from Full. Review and save.`);
     } catch (err: any) {
-      Alert.alert('Generation Failed', err.message || 'Unknown error');
+      showError(`Generation Failed: ${err.message || 'Unknown error'}`);
       setGenStatus('');
     } finally {
       setGenerating(false);
@@ -329,17 +348,16 @@ export default function AdminScreen() {
         headers,
         body: JSON.stringify({ pages }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setEditingBook((prev) => {
-          if (!prev) return prev;
-          return { ...prev, formats: { ...prev.formats, [activeFormat]: data.pages } };
-        });
-        setPreviewPages(null);
-        setGenStatus('');
-        fetchBooks();
-      }
-    } catch {} finally { setSaving(false); }
+      await ensureOk(res, 'Save pages');
+      const data = await res.json();
+      setEditingBook((prev) => {
+        if (!prev) return prev;
+        return { ...prev, formats: { ...prev.formats, [activeFormat]: data.pages } };
+      });
+      setPreviewPages(null);
+      setGenStatus('');
+      fetchBooks();
+    } catch (e: any) { showError(e.message); } finally { setSaving(false); }
   };
 
   // Add blank page
@@ -369,12 +387,13 @@ export default function AdminScreen() {
     // Save to server
     setSaving(true);
     try {
-      await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
+      const res = await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({ pages }),
       });
-    } catch {} finally { setSaving(false); }
+      await ensureOk(res, 'Save page');
+    } catch (e: any) { showError(e.message); } finally { setSaving(false); }
     setEditingPageIdx(null);
   };
 
@@ -390,27 +409,31 @@ export default function AdminScreen() {
     });
     setSaving(true);
     try {
-      await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
+      const res = await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({ pages }),
       });
-    } catch {} finally { setSaving(false); }
+      await ensureOk(res, 'Delete page');
+    } catch (e: any) { showError(e.message); } finally { setSaving(false); }
   };
 
   // Clear format
   const clearFormat = async () => {
     if (!editingBook) return;
     const doClear = async () => {
-      await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
-        method: 'DELETE',
-        headers,
-      });
-      setEditingBook({
-        ...editingBook,
-        formats: { ...editingBook.formats, [activeFormat]: [] },
-      });
-      fetchBooks();
+      try {
+        const res = await fetch(`${API_URL}/api/admin/books/${editingBook._id}/format/${activeFormat}`, {
+          method: 'DELETE',
+          headers,
+        });
+        await ensureOk(res, 'Clear format');
+        setEditingBook({
+          ...editingBook,
+          formats: { ...editingBook.formats, [activeFormat]: [] },
+        });
+        fetchBooks();
+      } catch (e: any) { showError(e.message); }
     };
     if (Platform.OS === 'web') {
       if (window.confirm(`Clear all ${FORMAT_DISPLAY[activeFormat]} pages?`)) doClear();
@@ -468,6 +491,9 @@ export default function AdminScreen() {
         <TouchableOpacity style={s.fab} onPress={() => setShowNewBook(true)}>
           <Ionicons name="add" size={28} color={colors.onPrimary} />
         </TouchableOpacity>
+
+        {/* Error Modal */}
+        <ErrorModal message={errorMsg} onClose={() => setErrorMsg(null)} />
 
         {/* New Book Modal */}
         <Modal visible={showNewBook} transparent animationType="fade">
@@ -698,6 +724,9 @@ export default function AdminScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
+      {/* Error Modal */}
+      <ErrorModal message={errorMsg} onClose={() => setErrorMsg(null)} />
+
       {/* Page Edit Modal */}
       <Modal visible={editingPageIdx !== null} transparent animationType="slide">
         <View style={s.modalOverlay}>
@@ -726,6 +755,27 @@ export default function AdminScreen() {
         </View>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+function ErrorModal({ message, onClose }: { message: string | null; onClose: () => void }) {
+  return (
+    <Modal visible={!!message} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={s.modalOverlay}>
+        <View style={s.errorCard}>
+          <View style={s.errorHeader}>
+            <Ionicons name="alert-circle" size={22} color={colors.error} />
+            <Text style={s.errorTitle}>Error</Text>
+          </View>
+          <ScrollView style={s.errorBodyScroll}>
+            <Text style={s.errorMsg} selectable>{message}</Text>
+          </ScrollView>
+          <TouchableOpacity style={s.errorDismiss} onPress={onClose}>
+            <Text style={s.errorDismissText}>Dismiss</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -994,4 +1044,26 @@ const s = StyleSheet.create({
   pageEditSaveText: { fontFamily: fonts.bodyBold, fontSize: 15, color: colors.onPrimary },
 
   empty: { fontFamily: fonts.body, fontSize: 14, color: colors.onSurfaceVariant, textAlign: 'center', paddingVertical: 32 },
+
+  // Error modal
+  errorCard: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: 20,
+    padding: 24,
+    width: '85%',
+    maxWidth: 440,
+    borderWidth: 1,
+    borderColor: colors.error + '40',
+  },
+  errorHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  errorTitle: { fontFamily: fonts.headlineBold, fontSize: 18, color: colors.error },
+  errorBodyScroll: { maxHeight: 240, marginBottom: 16 },
+  errorMsg: { fontFamily: fonts.body, fontSize: 14, color: colors.onSurface, lineHeight: 20 },
+  errorDismiss: {
+    backgroundColor: colors.error,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  errorDismissText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.onPrimary },
 });

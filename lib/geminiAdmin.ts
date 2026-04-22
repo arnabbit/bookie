@@ -37,13 +37,13 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQU
     timer = setTimeout(() => {
       try { controller.abort(); } catch {}
       console.warn(`[fetchWithTimeout] aborting after ${timeoutMs}ms: ${url}`);
-      reject(new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s — retrying`));
+      reject(new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
   });
   try {
     const fetchPromise = fetch(url, { ...init, signal: controller.signal }).catch((e: any) => {
       if (e?.name === 'AbortError') {
-        throw new Error(`Request aborted — retrying`);
+        throw new Error(`Request aborted`);
       }
       throw e;
     });
@@ -328,6 +328,7 @@ async function validateAndRepair(
   try {
     const parsed = await callWithRetry(() =>
       callAndParse(callApi, buildValidatorPrompt(pages, slices), { temperature: VALIDATOR_TEMP }),
+      onStatus,
     );
     const llmFlags: FlaggedPage[] = Array.isArray(parsed?.flagged)
       ? parsed.flagged.filter((f: any) => typeof f?.pageNumber === 'number')
@@ -338,7 +339,8 @@ async function validateAndRepair(
       }
     }
   } catch (e) {
-    console.warn('Validator pass failed, using word-count flags only', e);
+    console.warn('Validator pass failed', e);
+    throw e;
   }
 
   if (flaggedMap.size === 0) return pages;
@@ -352,13 +354,15 @@ async function validateAndRepair(
     try {
       const parsed = await callWithRetry(() =>
         callAndParse(callApi, buildRegenPrompt(format, slice, issue), { temperature: VALIDATOR_TEMP }),
+        onStatus,
       );
       const content = parsed?.content;
       if (typeof content === 'string' && content.trim()) {
         result[idx] = { ...result[idx], content };
       }
     } catch (e) {
-      console.warn(`Regen failed for page ${pageNumber}, keeping original`, e);
+      console.warn(`Regen failed for page ${pageNumber}`, e);
+      throw e;
     }
   }
   return result;
@@ -366,14 +370,16 @@ async function validateAndRepair(
 
 // ---------- Retry helper ----------
 
-async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
+async function callWithRetry<T>(fn: () => Promise<T>, onStatus?: (msg: string) => void): Promise<T> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await fn();
     } catch (e) {
       if (attempt === MAX_RETRIES) throw e;
       const delay = Math.min(2000 * Math.pow(2, attempt - 1), 15000);
+      const errMsg = (e as Error)?.message || String(e);
       console.warn(`Batch attempt ${attempt} failed, retrying in ${delay}ms...`, e);
+      onStatus?.(`Retry ${attempt + 1}/${MAX_RETRIES} in ${Math.round(delay / 1000)}s — ${errMsg.substring(0, 120)}`);
       await new Promise<void>((resolve) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const resolver = () => {
@@ -425,13 +431,19 @@ async function generateInBatches(
     onStatus?.(`Generating ${expectedPages} ${label} pages...`);
     const bookText = ocrPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
     const prompt = buildPrompt(format, totalPdfPages, bookText);
-    const parsed = await callWithRetry(() => callAndParse(callApi, prompt));
-    if (!parsed.pages?.length) throw new Error('No pages returned');
+    const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
+    if (!Array.isArray(parsed?.pages) || parsed.pages.length === 0) {
+      throw new Error('No pages returned');
+    }
 
     let pages: GeneratedPage[] = parsed.pages.slice(0, expectedPages).map((p: any, i: number) => ({
       pageNumber: p.pageNumber ?? i + 1,
       content: p.content || p.summary || '',
     }));
+
+    if (pages.every((p) => !p.content.trim())) {
+      throw new Error('Generation returned empty content for all pages');
+    }
 
     onStatus?.('Validating pages against source...');
     const slices = computePageSlices(ocrPages, pages, 1, totalPdfPages);
@@ -475,7 +487,7 @@ async function generateInBatches(
       text,
     );
 
-    const parsed = await callWithRetry(() => callAndParse(callApi, prompt));
+    const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
 
     if (b === 0) {
       title = parsed.title || '';
@@ -483,16 +495,29 @@ async function generateInBatches(
       summary = parsed.summary || '';
     }
 
-    let pages: GeneratedPage[] = (parsed.pages || []).slice(0, count).map((p: any, i: number) => ({
+    if (!Array.isArray(parsed?.pages) || parsed.pages.length === 0) {
+      throw new Error(`Batch ${b + 1}/${batches.length} (pages ${startPage}-${endPage}) returned no pages`);
+    }
+
+    let pages: GeneratedPage[] = parsed.pages.slice(0, count).map((p: any, i: number) => ({
       pageNumber: p.pageNumber ?? startPage + i,
       content: p.content || p.summary || '',
     }));
+
+    const emptyCount = pages.filter((p) => !p.content.trim()).length;
+    if (emptyCount === pages.length) {
+      throw new Error(`Batch ${b + 1}/${batches.length} (pages ${startPage}-${endPage}) returned empty content for all pages`);
+    }
 
     onStatus?.(`Validating batch ${b + 1}/${batches.length}...`);
     const slices = computePageSlices(ocrPages, pages, pdfStart, pdfEnd);
     pages = await validateAndRepair(callApi, format, pages, slices, onStatus);
 
     allPages.push(...pages);
+  }
+
+  if (allPages.length === 0) {
+    throw new Error('Generation produced no pages across all batches');
   }
 
   return { title, author, summary, pages: allPages.slice(0, expectedPages) };

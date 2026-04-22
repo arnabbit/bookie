@@ -4,6 +4,7 @@ import { GeminiBookResult } from './gemini';
 const OCR_ENDPOINT = 'https://pdftotext-sof5.onrender.com/ocr';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const BATCH_SIZE = 10;
+const MAX_RETRIES = 3;
 
 // ---------- Types ----------
 
@@ -81,12 +82,10 @@ function batchPages(pages: ParsedPage[]): ParsedPage[][] {
 async function callOpenRouter(
   apiKey: string,
   model: string,
-  prompt: string
+  prompt: string,
+  onStatus?: (msg: string) => void
 ): Promise<string> {
-  let attempt = 0;
-
-  while (true) {
-    attempt++;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       const response = await fetch(OPENROUTER_ENDPOINT, {
         method: 'POST',
@@ -113,11 +112,15 @@ async function callOpenRouter(
       if (!content) throw new Error('Empty response from OpenRouter');
       return content;
     } catch (e) {
+      if (attempt === MAX_RETRIES) throw e;
       const delay = Math.min(2000 * Math.pow(2, attempt - 1), 30000);
+      const errMsg = (e as Error)?.message || String(e);
       console.warn(`OpenRouter attempt ${attempt} failed, retrying in ${delay}ms...`, e);
+      onStatus?.(`Retry ${attempt + 1}/${MAX_RETRIES} in ${Math.round(delay / 1000)}s — ${errMsg.substring(0, 120)}`);
       await new Promise((r) => setTimeout(r, delay));
     }
   }
+  throw new Error('Unreachable');
 }
 
 // ---------- Per-batch page summaries + chapter detection ----------
@@ -125,7 +128,8 @@ async function callOpenRouter(
 async function processBatch(
   apiKey: string,
   model: string,
-  batch: ParsedPage[]
+  batch: ParsedPage[],
+  onStatus?: (msg: string) => void
 ): Promise<BatchResult> {
   const pagesText = batch
     .map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`)
@@ -146,8 +150,12 @@ Here are the pages:
 
 ${pagesText}`;
 
-  const raw = await callOpenRouter(apiKey, model, prompt);
-  return JSON.parse(raw) as BatchResult;
+  const raw = await callOpenRouter(apiKey, model, prompt, onStatus);
+  try {
+    return JSON.parse(raw) as BatchResult;
+  } catch (e) {
+    throw new Error(`Malformed JSON from OpenRouter batch: ${(e as Error).message} — preview: ${raw.substring(0, 200)}`);
+  }
 }
 
 // ---------- Assemble book: all pages under one chapter ----------
@@ -201,7 +209,7 @@ export async function processWithOpenRouter(
 
   for (let i = 0; i < batches.length; i++) {
     onStatus?.(`Summarizing pages ${i * BATCH_SIZE + 1}-${Math.min((i + 1) * BATCH_SIZE, pages.length)} of ${pages.length}...`);
-    const result = await processBatch(apiKey, model, batches[i]);
+    const result = await processBatch(apiKey, model, batches[i], onStatus);
     allPageSummaries.push(...result.pages);
 
     const book = assemblePageByPageBook(allPageSummaries, title, false);
