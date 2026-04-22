@@ -141,15 +141,29 @@ Instructions:
 2. Write a one-paragraph summary of the entire book (100-150 words).
 3. Produce EXACTLY ${expected} output pages.
 
-Respond with ONLY valid JSON:
-{
-  "title": "string",
-  "author": "string",
-  "summary": "string — 100-150 word book summary",
-  "pages": [
-    { "pageNumber": 1, "content": "string — EXACTLY 60-80 words" }
-  ]
-}
+Use this EXACT text format with these markers. Do not add JSON, code fences, or any other wrapping. Use the markers verbatim — a single line each, on their own line.
+
+<<<TITLE>>>
+(book title on one line)
+<<<END TITLE>>>
+
+<<<AUTHOR>>>
+(author name on one line)
+<<<END AUTHOR>>>
+
+<<<SUMMARY>>>
+(100-150 word book summary — can span multiple lines)
+<<<END SUMMARY>>>
+
+<<<PAGE 1>>>
+(60-80 word page content — can span multiple lines)
+<<<END PAGE 1>>>
+
+<<<PAGE 2>>>
+(60-80 word page content)
+<<<END PAGE 2>>>
+
+...continue numbering through PAGE ${expected}. Use the exact integer page numbers in both the start and end markers. No text outside these markers.
 
 --- BOOK TEXT ---
 ${bookText}`;
@@ -178,20 +192,21 @@ function buildBatchPrompt(
     : `Instructions:
 Produce EXACTLY ${pagesInBatch} output pages numbered ${startPage} through ${endPage}. Do NOT include title, author, or summary — only pages.`;
 
-  const jsonFormat = isFirst
-    ? `{
-  "title": "string",
-  "author": "string",
-  "summary": "string — 100-150 word book summary",
-  "pages": [
-    { "pageNumber": ${startPage}, "content": "string — EXACTLY 60-80 words" }
-  ]
-}`
-    : `{
-  "pages": [
-    { "pageNumber": ${startPage}, "content": "string — EXACTLY 60-80 words" }
-  ]
-}`;
+  const metaBlock = isFirst
+    ? `<<<TITLE>>>
+(book title on one line)
+<<<END TITLE>>>
+
+<<<AUTHOR>>>
+(author name on one line)
+<<<END AUTHOR>>>
+
+<<<SUMMARY>>>
+(100-150 word book summary — can span multiple lines)
+<<<END SUMMARY>>>
+
+`
+    : '';
 
   return `You are a literary condensation engine. You are creating a ${totalOutputPages}-page condensed version of a ${totalPdfPages}-page book.
 
@@ -203,8 +218,17 @@ ${qualityRules(format)}
 
 ${metaInstructions}
 
-Respond with ONLY valid JSON:
-${jsonFormat}
+Use this EXACT text format with these markers. Do not add JSON, code fences, or any other wrapping. Use the markers verbatim — on their own line each.
+
+${metaBlock}<<<PAGE ${startPage}>>>
+(60-80 word content)
+<<<END PAGE ${startPage}>>>
+
+<<<PAGE ${startPage + 1}>>>
+(60-80 word content)
+<<<END PAGE ${startPage + 1}>>>
+
+...continue numbering through PAGE ${endPage}. Use the exact integer page numbers in both start and end markers. No text outside these markers.
 
 --- BOOK TEXT (pages ${pdfStart}-${pdfEnd}) ---
 ${batchText}`;
@@ -253,10 +277,20 @@ Do NOT flag for:
 
 Be conservative — only flag clear morphing or fabrication.
 
-Respond with ONLY valid JSON:
-{ "flagged": [{ "pageNumber": <number>, "issue": "<short description>" }] }
+Use this EXACT text format. One <<<FLAG N>>>...<<<END FLAG N>>> block per flagged page, where N is the output page number. The body is a short description of the issue.
 
-If nothing is wrong, return { "flagged": [] }.
+<<<FLAG 3>>>
+short description of the issue
+<<<END FLAG 3>>>
+
+<<<FLAG 7>>>
+short description of the issue
+<<<END FLAG 7>>>
+
+If nothing is wrong, output only this single line:
+<<<NO FLAGS>>>
+
+Do not add JSON, code fences, or any text outside these markers.
 
 ${items}`;
 }
@@ -272,8 +306,11 @@ STRICT WORD COUNT: exactly 60-80 words.
 
 ${qualityRules(format)}
 
-Respond with ONLY valid JSON:
-{ "content": "string — EXACTLY 60-80 words" }
+Use this EXACT text format. Do not add JSON, code fences, or any text outside the markers.
+
+<<<CONTENT>>>
+(60-80 word content)
+<<<END CONTENT>>>
 
 --- SOURCE (PDF pages ${slice.sliceStart}-${slice.sliceEnd}) ---
 ${slice.sliceText}`;
@@ -397,13 +434,69 @@ async function callWithRetry<T>(fn: () => Promise<T>, onStatus?: (msg: string) =
   }
 }
 
-async function callAndParse(callApi: TextCallFn, prompt: string, opts?: TextCallOpts): Promise<any> {
-  const raw = await callApi(prompt, opts);
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    throw new Error(`Malformed JSON response: ${(e as Error).message} — preview: ${raw.substring(0, 200)}`);
+// Extracts the first block delimited by <<<TAG>>> ... <<<END TAG>>> (multiline).
+function extractBlock(raw: string, tag: string): string | undefined {
+  const re = new RegExp(`<<<\\s*${tag}\\s*>>>([\\s\\S]*?)<<<\\s*END\\s+${tag}\\s*>>>`, 'i');
+  const m = raw.match(re);
+  return m ? m[1].trim() : undefined;
+}
+
+// Parses all <<<PAGE N>>> ... <<<END PAGE N>>> blocks into [{pageNumber, content}].
+function extractPageBlocks(raw: string): { pageNumber: number; content: string }[] {
+  const re = /<<<\s*PAGE\s+(\d+)\s*>>>([\s\S]*?)<<<\s*END\s+PAGE\s+\1\s*>>>/gi;
+  const pages: { pageNumber: number; content: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    pages.push({ pageNumber: parseInt(m[1], 10), content: m[2].trim() });
   }
+  return pages;
+}
+
+// Parses all <<<FLAG N>>> ... <<<END FLAG N>>> blocks into [{pageNumber, issue}].
+function extractFlagBlocks(raw: string): { pageNumber: number; issue: string }[] {
+  const re = /<<<\s*FLAG\s+(\d+)\s*>>>([\s\S]*?)<<<\s*END\s+FLAG\s+\1\s*>>>/gi;
+  const flags: { pageNumber: number; issue: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    flags.push({ pageNumber: parseInt(m[1], 10), issue: m[2].trim() });
+  }
+  return flags;
+}
+
+// Strip common wrapping the model might add despite instructions (code fences).
+function stripWrapping(raw: string): string {
+  let s = raw.trim();
+  if (s.startsWith('```')) {
+    s = s.replace(/^```[a-zA-Z0-9_-]*\s*\n?/, '');
+    s = s.replace(/\n?```\s*$/, '');
+  }
+  return s.trim();
+}
+
+async function callAndParse(callApi: TextCallFn, prompt: string, opts?: TextCallOpts): Promise<any> {
+  const raw = stripWrapping(await callApi(prompt, opts));
+
+  const pages = extractPageBlocks(raw);
+  const flagged = extractFlagBlocks(raw);
+  const hasNoFlags = /<<<\s*NO\s+FLAGS\s*>>>/i.test(raw);
+
+  const result: any = {
+    title: extractBlock(raw, 'TITLE'),
+    author: extractBlock(raw, 'AUTHOR'),
+    summary: extractBlock(raw, 'SUMMARY'),
+    content: extractBlock(raw, 'CONTENT'),
+  };
+  if (pages.length > 0) result.pages = pages;
+  if (flagged.length > 0 || hasNoFlags) result.flagged = flagged;
+
+  // If nothing recognizable came back, surface a clear error with a preview.
+  const anyField =
+    result.title || result.author || result.summary || result.content ||
+    result.pages || result.flagged;
+  if (!anyField) {
+    throw new Error(`Malformed response — no recognized markers. preview: ${raw.substring(0, 200)}`);
+  }
+  return result;
 }
 
 // ---------- Batch orchestration ----------
@@ -530,7 +623,7 @@ function makeGeminiCall(apiKey: string): TextCallFn {
     const body = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
-        responseMimeType: 'application/json',
+        responseMimeType: 'text/plain',
         temperature: opts?.temperature ?? 0.7,
       },
     };
@@ -566,7 +659,6 @@ function makeOpenRouterCall(apiKey: string, model: string): TextCallFn {
         model,
         messages: [{ role: 'user', content: prompt }],
         temperature: opts?.temperature ?? 0.7,
-        response_format: { type: 'json_object' },
       }),
     });
 
