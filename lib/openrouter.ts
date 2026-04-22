@@ -4,7 +4,6 @@ import { GeminiBookResult } from './gemini';
 const OCR_ENDPOINT = 'https://pdftotext-sof5.onrender.com/ocr';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const BATCH_SIZE = 10;
-const MAX_RETRIES = 3;
 
 // ---------- Types ----------
 
@@ -85,7 +84,9 @@ async function callOpenRouter(
   prompt: string,
   onStatus?: (msg: string) => void
 ): Promise<string> {
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  let attempt = 1;
+  // Retries indefinitely — caller can cancel by unmounting or closing the app.
+  while (true) {
     try {
       const response = await fetch(OPENROUTER_ENDPOINT, {
         method: 'POST',
@@ -112,15 +113,14 @@ async function callOpenRouter(
       if (!content) throw new Error('Empty response from OpenRouter');
       return content;
     } catch (e) {
-      if (attempt === MAX_RETRIES) throw e;
       const delay = Math.min(2000 * Math.pow(2, attempt - 1), 30000);
       const errMsg = (e as Error)?.message || String(e);
       console.warn(`OpenRouter attempt ${attempt} failed, retrying in ${delay}ms...`, e);
-      onStatus?.(`Retry ${attempt + 1}/${MAX_RETRIES} in ${Math.round(delay / 1000)}s — ${errMsg.substring(0, 120)}`);
+      onStatus?.(`Retry ${attempt + 1} in ${Math.round(delay / 1000)}s — ${errMsg.substring(0, 120)}`);
       await new Promise((r) => setTimeout(r, delay));
+      attempt++;
     }
   }
-  throw new Error('Unreachable');
 }
 
 // ---------- Per-batch page summaries + chapter detection ----------

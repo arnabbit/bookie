@@ -5,7 +5,6 @@ const GEMINI_ENDPOINT =
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL = 'google/gemini-3.1-flash-lite-preview';
 const BATCH_SIZE = 20;
-const MAX_RETRIES = 3;
 const REQUEST_TIMEOUT_MS = 60_000;
 
 // Module-level handle so the UI can manually abort the in-flight batch request.
@@ -371,15 +370,16 @@ async function validateAndRepair(
 // ---------- Retry helper ----------
 
 async function callWithRetry<T>(fn: () => Promise<T>, onStatus?: (msg: string) => void): Promise<T> {
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  let attempt = 1;
+  // Retries indefinitely — caller (UI) can cancel by unmounting or closing the app.
+  while (true) {
     try {
       return await fn();
     } catch (e) {
-      if (attempt === MAX_RETRIES) throw e;
       const delay = Math.min(2000 * Math.pow(2, attempt - 1), 15000);
       const errMsg = (e as Error)?.message || String(e);
       console.warn(`Batch attempt ${attempt} failed, retrying in ${delay}ms...`, e);
-      onStatus?.(`Retry ${attempt + 1}/${MAX_RETRIES} in ${Math.round(delay / 1000)}s — ${errMsg.substring(0, 120)}`);
+      onStatus?.(`Retry ${attempt + 1} in ${Math.round(delay / 1000)}s — ${errMsg.substring(0, 120)}`);
       await new Promise<void>((resolve) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const resolver = () => {
@@ -392,9 +392,9 @@ async function callWithRetry<T>(fn: () => Promise<T>, onStatus?: (msg: string) =
         }, delay);
         skipBackoffResolve = resolver;
       });
+      attempt++;
     }
   }
-  throw new Error('Unreachable');
 }
 
 async function callAndParse(callApi: TextCallFn, prompt: string, opts?: TextCallOpts): Promise<any> {
