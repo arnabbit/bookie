@@ -340,7 +340,7 @@ function countWords(text: string): number {
   return (text.trim().match(/\S+/g) || []).length;
 }
 
-const WORD_COUNT_MAX = 100;
+export const DEFAULT_WORD_COUNT_MAX = 110;
 const VALIDATOR_TEMP = 0.2;
 
 async function validateAndRepair(
@@ -348,6 +348,7 @@ async function validateAndRepair(
   format: FormatType,
   pages: GeneratedPage[],
   slices: PageSlice[],
+  wordCountMax: number,
   onStatus?: (msg: string) => void,
 ): Promise<GeneratedPage[]> {
   const flaggedMap = new Map<number, string>();
@@ -355,8 +356,8 @@ async function validateAndRepair(
   // Deterministic: flag any page that exceeds word-count tolerance.
   for (const p of pages) {
     const wc = countWords(p.content);
-    if (wc > WORD_COUNT_MAX) {
-      flaggedMap.set(p.pageNumber, `word count too high: ${wc} words (cap ${WORD_COUNT_MAX})`);
+    if (wc > wordCountMax) {
+      flaggedMap.set(p.pageNumber, `word count too high: ${wc} words (cap ${wordCountMax})`);
     }
   }
 
@@ -513,6 +514,7 @@ async function generateInBatches(
   ocrPages: OcrPage[],
   format: FormatType,
   callApi: TextCallFn,
+  wordCountMax: number,
   onStatus?: (msg: string) => void,
 ): Promise<GenerationResult> {
   const totalPdfPages = ocrPages.length;
@@ -540,7 +542,7 @@ async function generateInBatches(
 
     onStatus?.('Validating pages against source...');
     const slices = computePageSlices(ocrPages, pages, 1, totalPdfPages);
-    pages = await validateAndRepair(callApi, format, pages, slices, onStatus);
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus);
 
     return {
       title: parsed.title || '',
@@ -604,7 +606,7 @@ async function generateInBatches(
 
     onStatus?.(`Validating batch ${b + 1}/${batches.length}...`);
     const slices = computePageSlices(ocrPages, pages, pdfStart, pdfEnd);
-    pages = await validateAndRepair(callApi, format, pages, slices, onStatus);
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus);
 
     allPages.push(...pages);
   }
@@ -681,6 +683,7 @@ export async function generateFormatFromPdf(
   apiKey: string,
   format: FormatType,
   onStatus?: (msg: string) => void,
+  wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('Gemini API key not available');
 
@@ -693,7 +696,7 @@ export async function generateFormatFromPdf(
   const expected = computeExpectedPages(format, totalPages);
   onStatus?.(`${totalPages} pages extracted → generating ${expected} ${formatLabel(format)} pages...`);
 
-  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), onStatus);
+  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus);
 }
 
 export async function generateFormatFromPdfOpenRouter(
@@ -702,6 +705,7 @@ export async function generateFormatFromPdfOpenRouter(
   format: FormatType,
   onStatus?: (msg: string) => void,
   model?: string,
+  wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('OpenRouter API key not available');
 
@@ -716,7 +720,7 @@ export async function generateFormatFromPdfOpenRouter(
   const expected = computeExpectedPages(format, totalPages);
   onStatus?.(`${totalPages} pages extracted → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
 
-  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), onStatus);
+  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus);
 }
 
 // Generate mini/pro from an existing Full (ultra) version — skips OCR.
@@ -729,6 +733,7 @@ export async function generateFormatFromFull(
   apiKey: string,
   format: FormatType,
   onStatus?: (msg: string) => void,
+  wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('Gemini API key not available');
   if (format === 'ultra') throw new Error('Cannot generate Full from Full');
@@ -738,7 +743,7 @@ export async function generateFormatFromFull(
   const expected = computeExpectedPages(format, ocrPages.length);
   onStatus?.(`Using Full (${ocrPages.length} pages) → generating ${expected} ${formatLabel(format)} pages...`);
 
-  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), onStatus);
+  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus);
 }
 
 export async function generateFormatFromFullOpenRouter(
@@ -747,6 +752,7 @@ export async function generateFormatFromFullOpenRouter(
   format: FormatType,
   onStatus?: (msg: string) => void,
   model?: string,
+  wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('OpenRouter API key not available');
   if (format === 'ultra') throw new Error('Cannot generate Full from Full');
@@ -757,5 +763,5 @@ export async function generateFormatFromFullOpenRouter(
   const expected = computeExpectedPages(format, ocrPages.length);
   onStatus?.(`Using Full (${ocrPages.length} pages) → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
 
-  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), onStatus);
+  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus);
 }

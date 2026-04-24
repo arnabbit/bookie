@@ -17,9 +17,12 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL, useAuth } from '@/lib/AuthContext';
 import { colors, fonts, radius, shadows, FORMAT_DISPLAY } from '@/lib/theme';
-import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage, cancelCurrentBatchRequest } from '@/lib/geminiAdmin';
+import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage, cancelCurrentBatchRequest, DEFAULT_WORD_COUNT_MAX } from '@/lib/geminiAdmin';
+
+const WORD_CAP_STORAGE_KEY = 'admin.wordCountMax';
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
 type Screen = 'list' | 'editor';
@@ -75,8 +78,15 @@ export default function AdminScreen() {
   // Custom OpenRouter model
   const [customModel, setCustomModel] = useState('google/gemini-3.1-flash-lite-preview');
   const [showCustomModel, setShowCustomModel] = useState(false);
+  // Validator word-count cap (persisted)
+  const [wordCountMaxText, setWordCountMaxText] = useState(String(DEFAULT_WORD_COUNT_MAX));
   // Error popup
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const wordCountMax = (() => {
+    const n = parseInt(wordCountMaxText, 10);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_WORD_COUNT_MAX;
+  })();
 
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
@@ -118,6 +128,21 @@ export default function AdminScreen() {
       } catch (e: any) { showError(e.message); }
     })();
   }, [token]);
+
+  // Load persisted word-count cap.
+  useEffect(() => {
+    (async () => {
+      try {
+        const v = await AsyncStorage.getItem(WORD_CAP_STORAGE_KEY);
+        if (v != null && v.trim()) setWordCountMaxText(v);
+      } catch {}
+    })();
+  }, []);
+
+  // Persist on change.
+  useEffect(() => {
+    AsyncStorage.setItem(WORD_CAP_STORAGE_KEY, String(wordCountMax)).catch(() => {});
+  }, [wordCountMax]);
 
   useEffect(() => {
     (async () => { setLoading(true); await fetchBooks(); setLoading(false); })();
@@ -222,7 +247,7 @@ export default function AdminScreen() {
       setGenerating(true);
       setGenStatus('Starting...');
 
-      const gen = await generateFormatFromPdf(file.uri, geminiKey, activeFormat, setGenStatus);
+      const gen = await generateFormatFromPdf(file.uri, geminiKey, activeFormat, setGenStatus, wordCountMax);
 
       // If book has no summary yet, use the generated one
       if (!metaSummary && gen.summary) {
@@ -258,7 +283,7 @@ export default function AdminScreen() {
       setGenerating(true);
       setGenStatus('Starting (OpenRouter)...');
 
-      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus);
+      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, undefined, wordCountMax);
 
       if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
       if (!metaTitle && gen.title) setMetaTitle(gen.title);
@@ -291,7 +316,7 @@ export default function AdminScreen() {
       setGenerating(true);
       setGenStatus(`Starting (${customModel})...`);
 
-      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, customModel.trim());
+      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, customModel.trim(), wordCountMax);
 
       if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
       if (!metaTitle && gen.title) setMetaTitle(gen.title);
@@ -321,8 +346,8 @@ export default function AdminScreen() {
       setGenStatus('Starting from Full...');
 
       const gen = useOpenRouter
-        ? await generateFormatFromFullOpenRouter(fullPages, openRouterKey, activeFormat, setGenStatus, model)
-        : await generateFormatFromFull(fullPages, geminiKey, activeFormat, setGenStatus);
+        ? await generateFormatFromFullOpenRouter(fullPages, openRouterKey, activeFormat, setGenStatus, model, wordCountMax)
+        : await generateFormatFromFull(fullPages, geminiKey, activeFormat, setGenStatus, wordCountMax);
 
       if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
       if (!metaTitle && gen.title) setMetaTitle(gen.title);
@@ -647,6 +672,18 @@ export default function AdminScreen() {
               </View>
             )}
 
+            <View style={s.customModelRow}>
+              <Text style={s.wordCapLabel}>Validator word cap</Text>
+              <TextInput
+                style={[s.input, { width: 80, marginBottom: 0, marginLeft: 8, textAlign: 'center' }]}
+                placeholder={String(DEFAULT_WORD_COUNT_MAX)}
+                placeholderTextColor={colors.outline}
+                value={wordCountMaxText}
+                onChangeText={(t) => setWordCountMaxText(t.replace(/[^0-9]/g, ''))}
+                keyboardType="number-pad"
+              />
+            </View>
+
             {generating && (
               <View style={s.genStatus}>
                 <ActivityIndicator size="small" color={colors.tertiary} />
@@ -890,6 +927,7 @@ const s = StyleSheet.create({
   // Actions
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 4, flexWrap: 'wrap' },
   customModelRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
+  wordCapLabel: { fontFamily: fonts.bodySemiBold, fontSize: 13, color: colors.onSurfaceVariant, flex: 1 },
   actionBtn: {
     flex: 1,
     flexDirection: 'row',
