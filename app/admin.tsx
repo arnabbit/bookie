@@ -12,6 +12,7 @@ import {
   Platform,
   Modal,
   KeyboardAvoidingView,
+  Switch,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,9 +21,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL, useAuth } from '@/lib/AuthContext';
 import { colors, fonts, radius, shadows, FORMAT_DISPLAY } from '@/lib/theme';
-import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage, cancelCurrentBatchRequest, DEFAULT_WORD_COUNT_MAX } from '@/lib/geminiAdmin';
+import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage, StrategyFlags, cancelCurrentBatchRequest, DEFAULT_WORD_COUNT_MAX } from '@/lib/geminiAdmin';
 
 const WORD_CAP_STORAGE_KEY = 'admin.wordCountMax';
+const STRATEGY_STORAGE_KEYS = {
+  semanticChunking: 'admin.strategy.semanticChunking',
+  voiceCard: 'admin.strategy.voiceCard',
+  perPageSmoothing: 'admin.strategy.perPageSmoothing',
+  backCheck: 'admin.strategy.backCheck',
+} as const;
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
 type Screen = 'list' | 'editor';
@@ -80,8 +87,20 @@ export default function AdminScreen() {
   const [showCustomModel, setShowCustomModel] = useState(false);
   // Validator word-count cap (persisted)
   const [wordCountMaxText, setWordCountMaxText] = useState(String(DEFAULT_WORD_COUNT_MAX));
+  // Strategy toggles (persisted)
+  const [semanticChunking, setSemanticChunking] = useState(false);
+  const [voiceCard, setVoiceCard] = useState(false);
+  const [perPageSmoothing, setPerPageSmoothing] = useState(false);
+  const [backCheck, setBackCheck] = useState(false);
   // Error popup
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const strategyFlags: StrategyFlags = {
+    semanticChunking,
+    voiceCard,
+    perPageSmoothing,
+    backCheck,
+  };
 
   const wordCountMax = (() => {
     const n = parseInt(wordCountMaxText, 10);
@@ -143,6 +162,27 @@ export default function AdminScreen() {
   useEffect(() => {
     AsyncStorage.setItem(WORD_CAP_STORAGE_KEY, String(wordCountMax)).catch(() => {});
   }, [wordCountMax]);
+
+  // Load persisted strategy toggles.
+  useEffect(() => {
+    (async () => {
+      try {
+        const sc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.semanticChunking);
+        if (sc != null) setSemanticChunking(sc === '1');
+        const vc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.voiceCard);
+        if (vc != null) setVoiceCard(vc === '1');
+        const pp = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.perPageSmoothing);
+        if (pp != null) setPerPageSmoothing(pp === '1');
+        const bc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.backCheck);
+        if (bc != null) setBackCheck(bc === '1');
+      } catch {}
+    })();
+  }, []);
+
+  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.semanticChunking, semanticChunking ? '1' : '0').catch(() => {}); }, [semanticChunking]);
+  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.voiceCard, voiceCard ? '1' : '0').catch(() => {}); }, [voiceCard]);
+  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.perPageSmoothing, perPageSmoothing ? '1' : '0').catch(() => {}); }, [perPageSmoothing]);
+  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.backCheck, backCheck ? '1' : '0').catch(() => {}); }, [backCheck]);
 
   useEffect(() => {
     (async () => { setLoading(true); await fetchBooks(); setLoading(false); })();
@@ -247,7 +287,7 @@ export default function AdminScreen() {
       setGenerating(true);
       setGenStatus('Starting...');
 
-      const gen = await generateFormatFromPdf(file.uri, geminiKey, activeFormat, setGenStatus, wordCountMax);
+      const gen = await generateFormatFromPdf(file.uri, geminiKey, activeFormat, setGenStatus, wordCountMax, strategyFlags);
 
       // If book has no summary yet, use the generated one
       if (!metaSummary && gen.summary) {
@@ -283,7 +323,7 @@ export default function AdminScreen() {
       setGenerating(true);
       setGenStatus('Starting (OpenRouter)...');
 
-      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, undefined, wordCountMax);
+      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, undefined, wordCountMax, strategyFlags);
 
       if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
       if (!metaTitle && gen.title) setMetaTitle(gen.title);
@@ -316,7 +356,7 @@ export default function AdminScreen() {
       setGenerating(true);
       setGenStatus(`Starting (${customModel})...`);
 
-      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, customModel.trim(), wordCountMax);
+      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, customModel.trim(), wordCountMax, strategyFlags);
 
       if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
       if (!metaTitle && gen.title) setMetaTitle(gen.title);
@@ -346,8 +386,8 @@ export default function AdminScreen() {
       setGenStatus('Starting from Full...');
 
       const gen = useOpenRouter
-        ? await generateFormatFromFullOpenRouter(fullPages, openRouterKey, activeFormat, setGenStatus, model, wordCountMax)
-        : await generateFormatFromFull(fullPages, geminiKey, activeFormat, setGenStatus, wordCountMax);
+        ? await generateFormatFromFullOpenRouter(fullPages, openRouterKey, activeFormat, setGenStatus, model, wordCountMax, strategyFlags)
+        : await generateFormatFromFull(fullPages, geminiKey, activeFormat, setGenStatus, wordCountMax, strategyFlags);
 
       if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
       if (!metaTitle && gen.title) setMetaTitle(gen.title);
@@ -684,6 +724,43 @@ export default function AdminScreen() {
               />
             </View>
 
+            {/* Strategy Toggles */}
+            <View style={s.strategyBox}>
+              <Text style={s.sectionLabel}>Processing Strategies</Text>
+
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Semantic Chunking</Text>
+                  <Text style={s.strategyHint}>Split on scene/chapter boundaries; allocate pages by importance</Text>
+                </View>
+                <Switch value={semanticChunking} onValueChange={setSemanticChunking} disabled={generating} />
+              </View>
+
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Voice Card</Text>
+                  <Text style={s.strategyHint}>Pre-pass style card injected into every prompt</Text>
+                </View>
+                <Switch value={voiceCard} onValueChange={setVoiceCard} disabled={generating} />
+              </View>
+
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Per-Page + Smoothing</Text>
+                  <Text style={s.strategyHint}>One LLM call per output page, then chunked smoothing pass</Text>
+                </View>
+                <Switch value={perPageSmoothing} onValueChange={setPerPageSmoothing} disabled={generating} />
+              </View>
+
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Back-Check by Expansion</Text>
+                  <Text style={s.strategyHint}>Expand drafted pages, judge vs source, regen on large delta</Text>
+                </View>
+                <Switch value={backCheck} onValueChange={setBackCheck} disabled={generating} />
+              </View>
+            </View>
+
             {generating && (
               <View style={s.genStatus}>
                 <ActivityIndicator size="small" color={colors.tertiary} />
@@ -928,6 +1005,19 @@ const s = StyleSheet.create({
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 4, flexWrap: 'wrap' },
   customModelRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
   wordCapLabel: { fontFamily: fonts.bodySemiBold, fontSize: 13, color: colors.onSurfaceVariant, flex: 1 },
+  strategyBox: {
+    marginTop: 14,
+    padding: 14,
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: 12,
+  },
+  strategyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  strategyLabel: { fontFamily: fonts.bodySemiBold, fontSize: 13, color: colors.onSurface },
+  strategyHint: { fontFamily: fonts.body, fontSize: 11, color: colors.onSurfaceVariant, marginTop: 2 },
   actionBtn: {
     flex: 1,
     flexDirection: 'row',

@@ -65,7 +65,19 @@ export interface GenerationResult {
   pages: GeneratedPage[];
 }
 
+export interface StrategyFlags {
+  semanticChunking?: boolean;
+  voiceCard?: boolean;
+  perPageSmoothing?: boolean;
+  backCheck?: boolean;
+}
+
 type FormatType = 'mini' | 'pro' | 'ultra';
+
+// Tuning — chosen defaults per admin-plans.md open Q's.
+const SMOOTHING_CHUNK_SIZE = 5;
+const BACK_CHECK_DELTA_THRESHOLD = 0.5; // judge score below this triggers regen
+const BACK_CHECK_MAX_REGENS = 1; // regen each flagged page at most once
 
 // ---------- OCR page parser ----------
 
@@ -124,7 +136,7 @@ function qualityRules(format: FormatType): string {
 
 // ---------- Prompt builders ----------
 
-function buildPrompt(format: FormatType, totalPages: number, bookText: string): string {
+function buildPrompt(format: FormatType, totalPages: number, bookText: string, voiceCard: string = ''): string {
   const expected = computeExpectedPages(format, totalPages);
   const pagesPerOutput = Math.round(totalPages / expected);
 
@@ -134,7 +146,7 @@ CRITICAL — FULL COVERAGE: Divide all ${totalPages} pages evenly across your ${
 
 STRICT WORD COUNT: Each page MUST be exactly 60-80 words. Not 40, not 100. Count carefully.
 
-${qualityRules(format)}
+${qualityRules(format)}${voiceCardBlock(voiceCard)}
 
 Instructions:
 1. Extract title and author.
@@ -181,6 +193,7 @@ function buildBatchPrompt(
   pdfEnd: number,
   totalPdfPages: number,
   batchText: string,
+  voiceCard: string = '',
 ): string {
   const isFirst = batchIndex === 0;
 
@@ -214,7 +227,7 @@ This text excerpt contains pages ${pdfStart}-${pdfEnd} of the original book (bat
 
 STRICT WORD COUNT: Each page MUST be exactly 60-80 words. Not 40, not 100. Count carefully.
 
-${qualityRules(format)}
+${qualityRules(format)}${voiceCardBlock(voiceCard)}
 
 ${metaInstructions}
 
@@ -295,7 +308,7 @@ Do not add JSON, code fences, or any text outside these markers.
 ${items}`;
 }
 
-function buildRegenPrompt(format: FormatType, slice: PageSlice, issue: string): string {
+function buildRegenPrompt(format: FormatType, slice: PageSlice, issue: string, voiceCard: string = ''): string {
   return `You are regenerating a single page that failed a faithfulness check.
 
 ISSUE REPORTED: ${issue}
@@ -304,7 +317,7 @@ Regenerate the page strictly from the source below. Do not introduce anything no
 
 STRICT WORD COUNT: exactly 60-80 words.
 
-${qualityRules(format)}
+${qualityRules(format)}${voiceCardBlock(voiceCard)}
 
 Use this EXACT text format. Do not add JSON, code fences, or any text outside the markers.
 
@@ -350,6 +363,7 @@ async function validateAndRepair(
   slices: PageSlice[],
   wordCountMax: number,
   onStatus?: (msg: string) => void,
+  voiceCard: string = '',
 ): Promise<GeneratedPage[]> {
   const flaggedMap = new Map<number, string>();
 
@@ -390,7 +404,7 @@ async function validateAndRepair(
     onStatus?.(`Repairing page ${pageNumber} — ${issue.substring(0, 60)}`);
     try {
       const parsed = await callWithRetry(() =>
-        callAndParse(callApi, buildRegenPrompt(format, slice, issue), { temperature: VALIDATOR_TEMP }),
+        callAndParse(callApi, buildRegenPrompt(format, slice, issue, voiceCard), { temperature: VALIDATOR_TEMP }),
         onStatus,
       );
       const content = parsed?.content;
@@ -500,6 +514,393 @@ async function callAndParse(callApi: TextCallFn, prompt: string, opts?: TextCall
   return result;
 }
 
+// ---------- Strategy 2: Voice Card ----------
+
+function buildVoiceCardPrompt(sampleA: string, sampleB: string, sampleC: string): string {
+  return `You are a literary style analyst. Read the three passages below (beginning / middle / end of a book) and produce a compact style card (~300 tokens max). Capture: diction level, sentence rhythm, POV, tense, signature devices, 2-3 representative sentences quoted verbatim. This card will be injected into every subsequent generation prompt — be concrete and actionable, not abstract.
+
+Use this EXACT text format. Do not add JSON, code fences, or any text outside the markers.
+
+<<<VOICE>>>
+(the style card — diction, rhythm, POV, tense, devices, representative sentences)
+<<<END VOICE>>>
+
+--- PASSAGE A (beginning) ---
+${sampleA}
+
+--- PASSAGE B (middle) ---
+${sampleB}
+
+--- PASSAGE C (end) ---
+${sampleC}`;
+}
+
+async function buildVoiceCard(ocrPages: OcrPage[], callApi: TextCallFn, onStatus?: (msg: string) => void): Promise<string> {
+  if (ocrPages.length === 0) return '';
+  const pick = (idx: number) => ocrPages[Math.max(0, Math.min(ocrPages.length - 1, idx))]?.text || '';
+  const sampleA = pick(Math.floor(ocrPages.length * 0.1));
+  const sampleB = pick(Math.floor(ocrPages.length * 0.5));
+  const sampleC = pick(Math.floor(ocrPages.length * 0.9));
+  onStatus?.('Extracting voice card...');
+  const raw = stripWrapping(await callApi(buildVoiceCardPrompt(sampleA, sampleB, sampleC), { temperature: 0.3 }));
+  const card = extractBlock(raw, 'VOICE') || '';
+  return card.trim();
+}
+
+function voiceCardBlock(card: string): string {
+  if (!card) return '';
+  return `\n\nAUTHOR VOICE CARD — match this exactly:\n${card}\n`;
+}
+
+// ---------- Strategy 1: Semantic Chunking ----------
+
+interface SemanticChunk {
+  pdfStart: number;
+  pdfEnd: number;
+  importance: number; // 0-10
+  label: string;
+}
+
+function buildSemanticAnchorsPrompt(ocrPages: OcrPage[]): string {
+  // Feed a truncated view so we stay within context — first N chars per page.
+  const compact = ocrPages.map((p) => `P${p.pageNum}: ${p.text.substring(0, 400).replace(/\s+/g, ' ')}`).join('\n');
+  return `You are a book structure analyst. Identify semantic chunks — scenes, chapters, or distinct arguments — by their START and END page numbers. Also rate each chunk's narrative importance 0-10 (10 = pivotal turning point, 0 = filler). Chunks must be contiguous and cover all pages 1-${ocrPages.length}. Expect between 5 and 30 chunks.
+
+Use this EXACT text format. Do not add JSON, code fences, or any text outside markers.
+
+<<<CHUNK 1>>>
+start: <int>
+end: <int>
+importance: <int 0-10>
+label: <short label>
+<<<END CHUNK 1>>>
+
+<<<CHUNK 2>>>
+...
+<<<END CHUNK 2>>>
+
+--- BOOK (page previews) ---
+${compact}`;
+}
+
+function extractSemanticChunks(raw: string): SemanticChunk[] {
+  const re = /<<<\s*CHUNK\s+\d+\s*>>>([\s\S]*?)<<<\s*END\s+CHUNK\s+\d+\s*>>>/gi;
+  const chunks: SemanticChunk[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    const body = m[1];
+    const start = parseInt(body.match(/start\s*:\s*(\d+)/i)?.[1] || '0', 10);
+    const end = parseInt(body.match(/end\s*:\s*(\d+)/i)?.[1] || '0', 10);
+    const importance = parseInt(body.match(/importance\s*:\s*(\d+)/i)?.[1] || '5', 10);
+    const label = (body.match(/label\s*:\s*([^\n]+)/i)?.[1] || '').trim();
+    if (start > 0 && end >= start) {
+      chunks.push({ pdfStart: start, pdfEnd: end, importance: Math.max(0, Math.min(10, importance)), label });
+    }
+  }
+  return chunks;
+}
+
+async function detectSemanticChunks(ocrPages: OcrPage[], callApi: TextCallFn, onStatus?: (msg: string) => void): Promise<SemanticChunk[]> {
+  onStatus?.('Detecting semantic chunks...');
+  try {
+    const raw = stripWrapping(await callApi(buildSemanticAnchorsPrompt(ocrPages), { temperature: 0.2 }));
+    const chunks = extractSemanticChunks(raw);
+    if (chunks.length === 0) return [];
+    // Clamp to book bounds.
+    return chunks.map((c) => ({
+      ...c,
+      pdfStart: Math.max(1, Math.min(ocrPages.length, c.pdfStart)),
+      pdfEnd: Math.max(1, Math.min(ocrPages.length, c.pdfEnd)),
+    })).filter((c) => c.pdfEnd >= c.pdfStart);
+  } catch (e) {
+    console.warn('Semantic chunk detection failed, falling back to uniform.', e);
+    return [];
+  }
+}
+
+// Allocate output pages across chunks weighted by importance (flex ±10% vs uniform).
+interface AllocatedChunk extends SemanticChunk {
+  outStart: number;
+  outEnd: number;
+  outCount: number;
+}
+
+function allocateOutputPages(chunks: SemanticChunk[], expectedPages: number): AllocatedChunk[] {
+  if (chunks.length === 0) return [];
+  const totalWeight = chunks.reduce((s, c) => s + Math.max(1, c.importance), 0);
+  // Raw float allocations
+  const raw = chunks.map((c) => (Math.max(1, c.importance) / totalWeight) * expectedPages);
+  // Floor + distribute remainder by largest fractional part
+  const base = raw.map((v) => Math.floor(v));
+  let assigned = base.reduce((s, v) => s + v, 0);
+  const remainders = raw.map((v, i) => ({ i, frac: v - Math.floor(v) })).sort((a, b) => b.frac - a.frac);
+  let ri = 0;
+  while (assigned < expectedPages && ri < remainders.length) {
+    base[remainders[ri].i]++;
+    assigned++;
+    ri++;
+  }
+  // Ensure each chunk gets at least 1 output page
+  for (let i = 0; i < base.length; i++) {
+    if (base[i] < 1) {
+      // steal from largest
+      let maxIdx = 0;
+      for (let j = 0; j < base.length; j++) if (base[j] > base[maxIdx]) maxIdx = j;
+      if (base[maxIdx] > 1) { base[maxIdx]--; base[i]++; }
+    }
+  }
+  let cursor = 1;
+  return chunks.map((c, i) => {
+    const outStart = cursor;
+    const outEnd = Math.min(expectedPages, cursor + base[i] - 1);
+    cursor = outEnd + 1;
+    return { ...c, outStart, outEnd, outCount: outEnd - outStart + 1 };
+  }).filter((a) => a.outCount > 0);
+}
+
+// ---------- Strategy 3: Per-Page Generation + Smoothing ----------
+
+function buildSinglePagePrompt(
+  format: FormatType,
+  pageNumber: number,
+  totalOutputPages: number,
+  pdfStart: number,
+  pdfEnd: number,
+  sliceText: string,
+  voiceCard: string,
+  label?: string,
+): string {
+  const labelLine = label ? `\nThis section is: ${label}.` : '';
+  return `You are a literary condensation engine. You are generating output page ${pageNumber} of ${totalOutputPages} for a condensed book version.${labelLine}
+
+This output page covers the source excerpt below (PDF pages ${pdfStart}-${pdfEnd}). Produce ONE page that condenses this excerpt faithfully — no cross-page interference, maximum fidelity to this slice.
+
+STRICT WORD COUNT: exactly 60-80 words.
+
+${qualityRules(format)}${voiceCardBlock(voiceCard)}
+
+Use this EXACT text format. No JSON, no code fences, no text outside the markers.
+
+<<<CONTENT>>>
+(60-80 word page content)
+<<<END CONTENT>>>
+
+--- SOURCE (PDF pages ${pdfStart}-${pdfEnd}) ---
+${sliceText}`;
+}
+
+function buildSmoothingPrompt(
+  format: FormatType,
+  chunkPages: GeneratedPage[],
+  prevNeighbor: GeneratedPage | null,
+  nextNeighbor: GeneratedPage | null,
+  voiceCard: string,
+): string {
+  const neighborIntro = (prevNeighbor || nextNeighbor)
+    ? `CONTEXT NEIGHBORS (read-only, do NOT rewrite — only use for tone/flow context):\n${prevNeighbor ? `Previous page ${prevNeighbor.pageNumber}:\n${prevNeighbor.content}\n\n` : ''}${nextNeighbor ? `Next page ${nextNeighbor.pageNumber}:\n${nextNeighbor.content}\n\n` : ''}`
+    : '';
+
+  const targets = chunkPages.map((p) => `<<<SMOOTHED ${p.pageNumber}>>>\n(smoothed 60-80 word content)\n<<<END SMOOTHED ${p.pageNumber}>>>`).join('\n\n');
+  const sources = chunkPages.map((p) => `--- Page ${p.pageNumber} (draft) ---\n${p.content}`).join('\n\n');
+
+  return `You are a literary smoother. Rephrase the draft pages below so they flow together as one continuous read. Fix batch seams, tone jumps, awkward handoffs. PHRASING ONLY — do not change meaning, add content, or remove ideas. Keep each page at 60-80 words.
+
+${qualityRules(format)}${voiceCardBlock(voiceCard)}
+
+${neighborIntro}Rewrite every draft page below. Use this EXACT text format. No JSON, no code fences, no text outside markers.
+
+${targets}
+
+${sources}`;
+}
+
+async function generatePerPage(
+  format: FormatType,
+  ocrPages: OcrPage[],
+  allocations: AllocatedChunk[] | null, // null = uniform allocation across full book
+  totalOutputPages: number,
+  callApi: TextCallFn,
+  voiceCard: string,
+  onStatus?: (msg: string) => void,
+): Promise<GeneratedPage[]> {
+  // Flatten allocations into per-output-page slices.
+  interface PerPageTask { outPage: number; pdfStart: number; pdfEnd: number; sliceText: string; label?: string }
+  const tasks: PerPageTask[] = [];
+
+  if (allocations && allocations.length > 0) {
+    for (const alloc of allocations) {
+      const pdfSpan = alloc.pdfEnd - alloc.pdfStart + 1;
+      const perOut = pdfSpan / alloc.outCount;
+      for (let i = 0; i < alloc.outCount; i++) {
+        const pdfStart = alloc.pdfStart + Math.floor(i * perOut);
+        const pdfEnd = Math.max(pdfStart, alloc.pdfStart + Math.floor((i + 1) * perOut) - 1);
+        const slice = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
+        const sliceText = slice.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
+        tasks.push({ outPage: alloc.outStart + i, pdfStart, pdfEnd, sliceText, label: alloc.label });
+      }
+    }
+  } else {
+    const totalPdf = ocrPages.length;
+    const perOut = totalPdf / totalOutputPages;
+    for (let i = 0; i < totalOutputPages; i++) {
+      const pdfStart = 1 + Math.floor(i * perOut);
+      const pdfEnd = Math.max(pdfStart, Math.floor((i + 1) * perOut));
+      const slice = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
+      const sliceText = slice.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
+      tasks.push({ outPage: i + 1, pdfStart, pdfEnd, sliceText });
+    }
+  }
+
+  const pages: GeneratedPage[] = [];
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    onStatus?.(`Per-page ${i + 1}/${tasks.length} — page ${t.outPage} (PDF ${t.pdfStart}-${t.pdfEnd})...`);
+    const prompt = buildSinglePagePrompt(format, t.outPage, totalOutputPages, t.pdfStart, t.pdfEnd, t.sliceText, voiceCard, t.label);
+    const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
+    const content = typeof parsed?.content === 'string' ? parsed.content.trim() : '';
+    if (!content) throw new Error(`Per-page generation returned empty content for page ${t.outPage}`);
+    pages.push({ pageNumber: t.outPage, content });
+  }
+  return pages;
+}
+
+async function smoothPages(
+  format: FormatType,
+  pages: GeneratedPage[],
+  callApi: TextCallFn,
+  voiceCard: string,
+  onStatus?: (msg: string) => void,
+): Promise<GeneratedPage[]> {
+  if (pages.length === 0) return pages;
+  const result = pages.map((p) => ({ ...p }));
+  const chunkSize = SMOOTHING_CHUNK_SIZE;
+  const totalChunks = Math.ceil(result.length / chunkSize);
+
+  for (let ci = 0; ci < totalChunks; ci++) {
+    const startIdx = ci * chunkSize;
+    const endIdx = Math.min(startIdx + chunkSize, result.length);
+    const chunkPages = result.slice(startIdx, endIdx);
+    const prev = startIdx > 0 ? result[startIdx - 1] : null;
+    const next = endIdx < result.length ? result[endIdx] : null;
+
+    onStatus?.(`Smoothing chunk ${ci + 1}/${totalChunks} (pages ${chunkPages[0].pageNumber}-${chunkPages[chunkPages.length - 1].pageNumber})...`);
+
+    const prompt = buildSmoothingPrompt(format, chunkPages, prev, next, voiceCard);
+    const raw = stripWrapping(await callWithRetry(() => callApi(prompt, { temperature: 0.5 }), onStatus));
+
+    // Parse <<<SMOOTHED N>>> ... <<<END SMOOTHED N>>> blocks.
+    const re = /<<<\s*SMOOTHED\s+(\d+)\s*>>>([\s\S]*?)<<<\s*END\s+SMOOTHED\s+\1\s*>>>/gi;
+    let m: RegExpExecArray | null;
+    const byPage = new Map<number, string>();
+    while ((m = re.exec(raw)) !== null) {
+      byPage.set(parseInt(m[1], 10), m[2].trim());
+    }
+    for (let i = 0; i < chunkPages.length; i++) {
+      const p = chunkPages[i];
+      const smoothed = byPage.get(p.pageNumber);
+      if (smoothed) {
+        const idxInResult = startIdx + i;
+        result[idxInResult] = { ...result[idxInResult], content: smoothed };
+      } else {
+        console.warn(`Smoothing skipped page ${p.pageNumber} — no block found`);
+      }
+    }
+  }
+  return result;
+}
+
+// ---------- Strategy 4: Back-Check by Expansion ----------
+
+function buildExpansionPrompt(page: GeneratedPage, sliceText: string): string {
+  const sourceWords = countWords(sliceText);
+  return `You are an expansion engine. Expand the condensed page below back to approximately ${sourceWords} words — filling in the plausible detail the original source would have contained. This is for faithfulness auditing, so your expansion should cover every implication of the condensed page.
+
+Use this EXACT text format. No JSON, no code fences.
+
+<<<EXPANSION>>>
+(expanded ~${sourceWords} word text)
+<<<END EXPANSION>>>
+
+--- CONDENSED PAGE ${page.pageNumber} ---
+${page.content}`;
+}
+
+function buildBackCheckJudgePrompt(page: GeneratedPage, expansion: string, sliceText: string): string {
+  return `You are a faithfulness judge. Compare a reconstruction (what an expander produced from a condensed page) against the actual source. Score 0.0 (completely different — major omissions or fabrications) to 1.0 (covers the same events/ideas).
+
+Use this EXACT text format. No JSON, no code fences.
+
+<<<SCORE>>>
+(single number 0.0-1.0)
+<<<END SCORE>>>
+
+<<<REASON>>>
+(one sentence — what was omitted or fabricated, if anything)
+<<<END REASON>>>
+
+--- ACTUAL SOURCE ---
+${sliceText}
+
+--- RECONSTRUCTION ---
+${expansion}`;
+}
+
+async function backCheckAndRegen(
+  format: FormatType,
+  pages: GeneratedPage[],
+  slices: PageSlice[],
+  callApi: TextCallFn,
+  voiceCard: string,
+  onStatus?: (msg: string) => void,
+): Promise<GeneratedPage[]> {
+  const result = [...pages];
+  for (let i = 0; i < result.length; i++) {
+    const page = result[i];
+    const slice = slices.find((s) => s.pageNumber === page.pageNumber);
+    if (!slice) continue;
+    onStatus?.(`Back-check ${i + 1}/${result.length} — expanding page ${page.pageNumber}...`);
+
+    let expansion = '';
+    try {
+      const raw = stripWrapping(await callWithRetry(() => callApi(buildExpansionPrompt(page, slice.sliceText), { temperature: 0.4 }), onStatus));
+      expansion = extractBlock(raw, 'EXPANSION') || '';
+    } catch (e) {
+      console.warn(`Back-check expansion failed page ${page.pageNumber}`, e);
+      continue;
+    }
+    if (!expansion) continue;
+
+    let score = 1.0;
+    let reason = '';
+    try {
+      const raw = stripWrapping(await callWithRetry(() => callApi(buildBackCheckJudgePrompt(page, expansion, slice.sliceText), { temperature: VALIDATOR_TEMP }), onStatus));
+      const scoreStr = extractBlock(raw, 'SCORE') || '';
+      const parsed = parseFloat(scoreStr);
+      if (Number.isFinite(parsed)) score = parsed;
+      reason = extractBlock(raw, 'REASON') || '';
+    } catch (e) {
+      console.warn(`Back-check judge failed page ${page.pageNumber}`, e);
+      continue;
+    }
+
+    if (score < BACK_CHECK_DELTA_THRESHOLD) {
+      onStatus?.(`Regen page ${page.pageNumber} — back-check score ${score.toFixed(2)}: ${reason.substring(0, 60)}`);
+      for (let attempt = 0; attempt < BACK_CHECK_MAX_REGENS; attempt++) {
+        try {
+          const raw = stripWrapping(await callWithRetry(() => callApi(buildRegenPrompt(format, slice, `back-check omission: ${reason}`, voiceCard), { temperature: VALIDATOR_TEMP }), onStatus));
+          const content = extractBlock(raw, 'CONTENT');
+          if (content && content.trim()) {
+            result[i] = { ...result[i], content: content.trim() };
+          }
+        } catch (e) {
+          console.warn(`Back-check regen failed page ${page.pageNumber}`, e);
+        }
+      }
+    }
+  }
+  return result;
+}
+
 // ---------- Batch orchestration ----------
 
 interface TextCallOpts {
@@ -516,16 +917,96 @@ async function generateInBatches(
   callApi: TextCallFn,
   wordCountMax: number,
   onStatus?: (msg: string) => void,
+  flags: StrategyFlags = {},
 ): Promise<GenerationResult> {
   const totalPdfPages = ocrPages.length;
   const expectedPages = computeExpectedPages(format, totalPdfPages);
+
+  // Strategy 2: Voice Card — one-shot pre-pass if enabled.
+  let voiceCard = '';
+  if (flags.voiceCard) {
+    try {
+      voiceCard = await buildVoiceCard(ocrPages, callApi, onStatus);
+      if (voiceCard) onStatus?.(`Voice card ready (${voiceCard.length} chars).`);
+    } catch (e) {
+      console.warn('Voice card generation failed, continuing without', e);
+    }
+  }
+
+  // Strategy 1: Semantic Chunking — detect narrative boundaries + allocate output pages.
+  // Skip when single-shot batch path will be taken (allocations unused there).
+  let allocations: AllocatedChunk[] | null = null;
+  const willSingleShot = !flags.perPageSmoothing && expectedPages <= BATCH_SIZE;
+  if (flags.semanticChunking && !willSingleShot) {
+    const chunks = await detectSemanticChunks(ocrPages, callApi, onStatus);
+    if (chunks.length > 0) {
+      allocations = allocateOutputPages(chunks, expectedPages);
+      onStatus?.(`Semantic chunking: ${allocations.length} chunks allocated.`);
+    }
+  }
+
+  // Strategy 3: Per-Page Generation + Chunked Smoothing path.
+  if (flags.perPageSmoothing) {
+    let pages = await generatePerPage(format, ocrPages, allocations, expectedPages, callApi, voiceCard, onStatus);
+
+    // Extract title/author/summary — piggyback on voice card sample OR do a dedicated pass.
+    let title = '', author = '', summary = '';
+    try {
+      onStatus?.('Extracting title / author / summary...');
+      const metaPrompt = `Extract book metadata from the excerpts below.
+
+Use this EXACT text format:
+
+<<<TITLE>>>
+(book title)
+<<<END TITLE>>>
+
+<<<AUTHOR>>>
+(author name)
+<<<END AUTHOR>>>
+
+<<<SUMMARY>>>
+(100-150 word summary of the entire book)
+<<<END SUMMARY>>>
+
+--- BOOK START ---
+${ocrPages.slice(0, 3).map((p) => p.text).join('\n\n').substring(0, 3000)}
+
+--- BOOK END ---
+${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
+      const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
+      title = parsed.title || '';
+      author = parsed.author || '';
+      summary = parsed.summary || '';
+    } catch (e) {
+      console.warn('Metadata extraction failed', e);
+    }
+
+    // Smoothing pass.
+    onStatus?.('Smoothing pass...');
+    pages = await smoothPages(format, pages, callApi, voiceCard, onStatus);
+
+    // Validator still runs (word-cap + fabrication check).
+    const slices = computePageSlicesFromAllocations(ocrPages, pages, allocations, expectedPages, totalPdfPages);
+    onStatus?.('Validating pages against source...');
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
+
+    // Strategy 4: Back-Check by Expansion.
+    if (flags.backCheck) {
+      pages = await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus);
+    }
+
+    return { title, author, summary, pages };
+  }
+
+  // ----- Classic batch path (per-page smoothing OFF) -----
 
   // Small enough — single shot
   if (expectedPages <= BATCH_SIZE) {
     const label = formatLabel(format);
     onStatus?.(`Generating ${expectedPages} ${label} pages...`);
     const bookText = ocrPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
-    const prompt = buildPrompt(format, totalPdfPages, bookText);
+    const prompt = buildPrompt(format, totalPdfPages, bookText, voiceCard);
     const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
     if (!Array.isArray(parsed?.pages) || parsed.pages.length === 0) {
       throw new Error('No pages returned');
@@ -542,7 +1023,11 @@ async function generateInBatches(
 
     onStatus?.('Validating pages against source...');
     const slices = computePageSlices(ocrPages, pages, 1, totalPdfPages);
-    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus);
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
+
+    if (flags.backCheck) {
+      pages = await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus);
+    }
 
     return {
       title: parsed.title || '',
@@ -552,24 +1037,49 @@ async function generateInBatches(
     };
   }
 
-  // Batch mode — split OCR text into chunks
+  // Batch mode — split OCR text into chunks.
+  // If semantic chunking is on, derive batch boundaries from allocations (grouping chunks to roughly BATCH_SIZE output pages each).
   const batches: { startPage: number; endPage: number; count: number; pdfStart: number; pdfEnd: number; text: string }[] = [];
-  for (let i = 0; i < expectedPages; i += BATCH_SIZE) {
-    const startPage = i + 1;
-    const endPage = Math.min(i + BATCH_SIZE, expectedPages);
-    const count = endPage - startPage + 1;
-    const pdfStart = Math.floor((startPage - 1) / expectedPages * totalPdfPages) + 1;
-    const pdfEnd = Math.min(Math.floor(endPage / expectedPages * totalPdfPages), totalPdfPages);
 
-    const chunkPages = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
-    const text = chunkPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
-    batches.push({ startPage, endPage, count, pdfStart, pdfEnd, text });
+  if (allocations && allocations.length > 0) {
+    let acc: AllocatedChunk[] = [];
+    let accCount = 0;
+    const flush = () => {
+      if (acc.length === 0) return;
+      const startPage = acc[0].outStart;
+      const endPage = acc[acc.length - 1].outEnd;
+      const pdfStart = acc[0].pdfStart;
+      const pdfEnd = acc[acc.length - 1].pdfEnd;
+      const chunkPages = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
+      const text = chunkPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
+      batches.push({ startPage, endPage, count: endPage - startPage + 1, pdfStart, pdfEnd, text });
+      acc = []; accCount = 0;
+    };
+    for (const a of allocations) {
+      acc.push(a);
+      accCount += a.outCount;
+      if (accCount >= BATCH_SIZE) flush();
+    }
+    flush();
+  } else {
+    for (let i = 0; i < expectedPages; i += BATCH_SIZE) {
+      const startPage = i + 1;
+      const endPage = Math.min(i + BATCH_SIZE, expectedPages);
+      const count = endPage - startPage + 1;
+      const pdfStart = Math.floor((startPage - 1) / expectedPages * totalPdfPages) + 1;
+      const pdfEnd = Math.min(Math.floor(endPage / expectedPages * totalPdfPages), totalPdfPages);
+
+      const chunkPages = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
+      const text = chunkPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
+      batches.push({ startPage, endPage, count, pdfStart, pdfEnd, text });
+    }
   }
 
   let title = '';
   let author = '';
   let summary = '';
   const allPages: GeneratedPage[] = [];
+  const allSlices: PageSlice[] = [];
 
   for (let b = 0; b < batches.length; b++) {
     const { startPage, endPage, count, pdfStart, pdfEnd, text } = batches[b];
@@ -579,7 +1089,7 @@ async function generateInBatches(
       format, b, batches.length,
       startPage, endPage, count,
       expectedPages, pdfStart, pdfEnd, totalPdfPages,
-      text,
+      text, voiceCard,
     );
 
     const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
@@ -606,16 +1116,53 @@ async function generateInBatches(
 
     onStatus?.(`Validating batch ${b + 1}/${batches.length}...`);
     const slices = computePageSlices(ocrPages, pages, pdfStart, pdfEnd);
-    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus);
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
 
     allPages.push(...pages);
+    allSlices.push(...slices);
   }
 
   if (allPages.length === 0) {
     throw new Error('Generation produced no pages across all batches');
   }
 
-  return { title, author, summary, pages: allPages.slice(0, expectedPages) };
+  let finalPages = allPages.slice(0, expectedPages);
+
+  // Strategy 4: Back-Check by Expansion (classic path, batch-mode).
+  if (flags.backCheck) {
+    finalPages = await backCheckAndRegen(format, finalPages, allSlices, callApi, voiceCard, onStatus);
+  }
+
+  return { title, author, summary, pages: finalPages };
+}
+
+// Helper: compute slices for per-page path using allocations (or uniform fallback).
+function computePageSlicesFromAllocations(
+  ocrPages: OcrPage[],
+  pages: GeneratedPage[],
+  allocations: AllocatedChunk[] | null,
+  expectedPages: number,
+  totalPdfPages: number,
+): PageSlice[] {
+  if (!allocations || allocations.length === 0) {
+    return computePageSlices(ocrPages, pages, 1, totalPdfPages);
+  }
+  const slices: PageSlice[] = [];
+  for (const alloc of allocations) {
+    const pdfSpan = alloc.pdfEnd - alloc.pdfStart + 1;
+    const perOut = pdfSpan / alloc.outCount;
+    for (let i = 0; i < alloc.outCount; i++) {
+      const pageNumber = alloc.outStart + i;
+      const page = pages.find((p) => p.pageNumber === pageNumber);
+      if (!page) continue;
+      const sliceStart = alloc.pdfStart + Math.floor(i * perOut);
+      const sliceEnd = Math.max(sliceStart, alloc.pdfStart + Math.floor((i + 1) * perOut) - 1);
+      const slicePages = ocrPages.filter((op) => op.pageNum >= sliceStart && op.pageNum <= sliceEnd);
+      const sliceText = slicePages.map((op) => `Page ${op.pageNum} start\n${op.text}\nPage ${op.pageNum} end`).join('\n\n');
+      slices.push({ pageNumber, sliceStart, sliceEnd, sliceText });
+    }
+  }
+  return slices;
 }
 
 // ---------- API call factories ----------
@@ -684,6 +1231,7 @@ export async function generateFormatFromPdf(
   format: FormatType,
   onStatus?: (msg: string) => void,
   wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
+  flags: StrategyFlags = {},
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('Gemini API key not available');
 
@@ -696,7 +1244,7 @@ export async function generateFormatFromPdf(
   const expected = computeExpectedPages(format, totalPages);
   onStatus?.(`${totalPages} pages extracted → generating ${expected} ${formatLabel(format)} pages...`);
 
-  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus);
+  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus, flags);
 }
 
 export async function generateFormatFromPdfOpenRouter(
@@ -706,6 +1254,7 @@ export async function generateFormatFromPdfOpenRouter(
   onStatus?: (msg: string) => void,
   model?: string,
   wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
+  flags: StrategyFlags = {},
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('OpenRouter API key not available');
 
@@ -720,7 +1269,7 @@ export async function generateFormatFromPdfOpenRouter(
   const expected = computeExpectedPages(format, totalPages);
   onStatus?.(`${totalPages} pages extracted → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
 
-  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus);
+  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus, flags);
 }
 
 // Generate mini/pro from an existing Full (ultra) version — skips OCR.
@@ -734,6 +1283,7 @@ export async function generateFormatFromFull(
   format: FormatType,
   onStatus?: (msg: string) => void,
   wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
+  flags: StrategyFlags = {},
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('Gemini API key not available');
   if (format === 'ultra') throw new Error('Cannot generate Full from Full');
@@ -743,7 +1293,7 @@ export async function generateFormatFromFull(
   const expected = computeExpectedPages(format, ocrPages.length);
   onStatus?.(`Using Full (${ocrPages.length} pages) → generating ${expected} ${formatLabel(format)} pages...`);
 
-  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus);
+  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus, flags);
 }
 
 export async function generateFormatFromFullOpenRouter(
@@ -753,6 +1303,7 @@ export async function generateFormatFromFullOpenRouter(
   onStatus?: (msg: string) => void,
   model?: string,
   wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
+  flags: StrategyFlags = {},
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('OpenRouter API key not available');
   if (format === 'ultra') throw new Error('Cannot generate Full from Full');
@@ -763,5 +1314,5 @@ export async function generateFormatFromFullOpenRouter(
   const expected = computeExpectedPages(format, ocrPages.length);
   onStatus?.(`Using Full (${ocrPages.length} pages) → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
 
-  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus);
+  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus, flags);
 }
