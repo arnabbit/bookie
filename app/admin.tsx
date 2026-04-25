@@ -29,6 +29,7 @@ const STRATEGY_STORAGE_KEYS = {
   voiceCard: 'admin.strategy.voiceCard',
   perPageSmoothing: 'admin.strategy.perPageSmoothing',
   backCheck: 'admin.strategy.backCheck',
+  highlightMap: 'admin.strategy.highlightMap',
 } as const;
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
@@ -92,6 +93,7 @@ export default function AdminScreen() {
   const [voiceCard, setVoiceCard] = useState(false);
   const [perPageSmoothing, setPerPageSmoothing] = useState(false);
   const [backCheck, setBackCheck] = useState(false);
+  const [highlightMap, setHighlightMap] = useState(false);
   // Error popup
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -100,6 +102,7 @@ export default function AdminScreen() {
     voiceCard,
     perPageSmoothing,
     backCheck,
+    highlightMap,
   };
 
   const wordCountMax = (() => {
@@ -175,6 +178,8 @@ export default function AdminScreen() {
         if (pp != null) setPerPageSmoothing(pp === '1');
         const bc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.backCheck);
         if (bc != null) setBackCheck(bc === '1');
+        const hm = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.highlightMap);
+        if (hm != null) setHighlightMap(hm === '1');
       } catch {}
     })();
   }, []);
@@ -183,6 +188,7 @@ export default function AdminScreen() {
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.voiceCard, voiceCard ? '1' : '0').catch(() => {}); }, [voiceCard]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.perPageSmoothing, perPageSmoothing ? '1' : '0').catch(() => {}); }, [perPageSmoothing]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.backCheck, backCheck ? '1' : '0').catch(() => {}); }, [backCheck]);
+  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.highlightMap, highlightMap ? '1' : '0').catch(() => {}); }, [highlightMap]);
 
   useEffect(() => {
     (async () => { setLoading(true); await fetchBooks(); setLoading(false); })();
@@ -758,6 +764,14 @@ export default function AdminScreen() {
                   <Text style={s.strategyHint}>Expand drafted pages, judge vs source, regen on large delta</Text>
                 </View>
                 <Switch value={backCheck} onValueChange={setBackCheck} disabled={generating} />
+              </View>
+
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Highlight-Driven Map</Text>
+                  <Text style={s.strategyHint}>Per-page highlight → classify story/filler → importance-aware gen. Output page count is variable (story pages may expand). Overrides Per-Page+Smoothing and Semantic Chunking. Note: format selector (mini/pro/ultra) is ignored — output size is driven by per-page importance.</Text>
+                </View>
+                <Switch value={highlightMap} onValueChange={setHighlightMap} disabled={generating} />
               </View>
             </View>
 

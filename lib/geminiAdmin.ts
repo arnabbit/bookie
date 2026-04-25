@@ -70,6 +70,7 @@ export interface StrategyFlags {
   voiceCard?: boolean;
   perPageSmoothing?: boolean;
   backCheck?: boolean;
+  highlightMap?: boolean;
 }
 
 type FormatType = 'mini' | 'pro' | 'ultra';
@@ -901,6 +902,225 @@ async function backCheckAndRegen(
   return result;
 }
 
+// ---------- Strategy 5: Highlight-Driven Importance Map ----------
+
+type Importance = 'story' | 'semi-filler' | 'filler';
+
+interface PageHighlight {
+  pageNum: number;
+  highlight: string;
+}
+
+function buildHighlightPrompt(page: OcrPage, totalPages: number): string {
+  return `You are reading page ${page.pageNum} of a ${totalPages}-page book. Produce a brief 1-3 sentence highlight: what happens here, or what's the core point. Be concrete — name characters/places/concepts. No generic summary.
+
+Use this EXACT text format. No JSON, no code fences.
+
+<<<HIGHLIGHT>>>
+(1-3 sentence highlight)
+<<<END HIGHLIGHT>>>
+
+--- PAGE ${page.pageNum} ---
+${page.text}`;
+}
+
+// Contract: <<<CAT N>>> uses N as the 1-based sequential index into the highlights array
+// passed to the prompt — NOT the OCR pageNum. This avoids silent failure when OCR pageNums
+// skip front matter or are non-contiguous. Parser maps N back to highlights[N-1].pageNum.
+function buildClassifyPrompt(highlights: PageHighlight[]): string {
+  const list = highlights.map((h, i) => `Item ${i + 1}: ${h.highlight}`).join('\n');
+  return `You are categorizing pages of a book by narrative importance. Read all highlights together, then classify each item as one of: story, semi-filler, filler.
+
+- story: pivotal — turning points, key arguments, dramatic scenes, core thesis moments
+- semi-filler: meaningful but not pivotal — supporting examples, character beats, secondary arguments
+- filler: low-stakes — filler description, repetition, transitional padding
+
+Use this EXACT text format. One <<<CAT N>>> block per item, where N matches the Item number above. You MUST emit a block for EVERY item from 1 to ${highlights.length}.
+
+<<<CAT 1>>>
+story
+<<<END CAT 1>>>
+
+<<<CAT 2>>>
+filler
+<<<END CAT 2>>>
+
+...continue for every item up to ${highlights.length}.
+
+--- HIGHLIGHTS ---
+${list}`;
+}
+
+function extractCategories(raw: string, highlights: PageHighlight[]): Map<number, Importance> {
+  const re = /<<<\s*CAT\s+(\d+)\s*>>>([\s\S]*?)<<<\s*END\s+CAT\s+\1\s*>>>/gi;
+  const out = new Map<number, Importance>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    const idx = parseInt(m[1], 10);
+    if (idx < 1 || idx > highlights.length) continue;
+    const pageNum = highlights[idx - 1].pageNum;
+    const body = m[2].trim().toLowerCase();
+    let cat: Importance = 'semi-filler';
+    if (body.startsWith('story')) cat = 'story';
+    else if (body.startsWith('filler')) cat = 'filler';
+    else if (body.startsWith('semi')) cat = 'semi-filler';
+    out.set(pageNum, cat);
+  }
+  return out;
+}
+
+function buildImportanceGenPrompt(
+  format: FormatType,
+  page: OcrPage,
+  category: Importance,
+  highlightMap: PageHighlight[],
+  importanceMap: Map<number, Importance>,
+  voiceCard: string,
+): string {
+  const expansionRule =
+    category === 'filler'
+      ? `This page is FILLER. Compress aggressively. Output 0 or 1 pages. If the content is truly throwaway, emit zero <<<PAGE>>> blocks. Otherwise emit ONE 60-80 word page that captures only the bare minimum.`
+      : category === 'semi-filler'
+      ? `This page is SEMI-FILLER. Condense 1:1 — emit exactly ONE 60-80 word page covering the meaningful content of this source page.`
+      : `This page is STORY. Expand if warranted — emit 1, 2, or 3 60-80 word pages so each pivotal beat gets full breathing room. Each page must cover a distinct moment/idea from this source page; do not pad.`;
+
+  const mapPreview = highlightMap
+    .map((h) => `P${h.pageNum} [${importanceMap.get(h.pageNum) || 'semi-filler'}]: ${h.highlight.substring(0, 120)}`)
+    .join('\n');
+
+  return `You are a literary condensation engine using importance-aware page expansion. You are processing source page ${page.pageNum}.
+
+${expansionRule}
+
+STRICT WORD COUNT: each output page MUST be 60-80 words.
+
+${qualityRules(format)}${voiceCardBlock(voiceCard)}
+
+GLOBAL CONTEXT — full book importance map (for tone/continuity, do not retell other pages):
+${mapPreview}
+
+Use this EXACT text format. Emit zero or more <<<PAGE N>>> blocks where N is a sequential local index (1, 2, ...). No JSON, no code fences, no text outside markers.
+
+<<<PAGE 1>>>
+(60-80 word content)
+<<<END PAGE 1>>>
+
+(emit additional <<<PAGE 2>>>, <<<PAGE 3>>> only if STORY page warrants it)
+
+--- SOURCE PAGE ${page.pageNum} ---
+${page.text}`;
+}
+
+async function extractHighlights(
+  ocrPages: OcrPage[],
+  callApi: TextCallFn,
+  onStatus?: (msg: string) => void,
+): Promise<PageHighlight[]> {
+  const highlights: PageHighlight[] = [];
+  for (let i = 0; i < ocrPages.length; i++) {
+    const p = ocrPages[i];
+    onStatus?.(`Extracting highlights ${i + 1}/${ocrPages.length} (page ${p.pageNum})...`);
+    const raw = stripWrapping(await callWithRetry(() => callApi(buildHighlightPrompt(p, ocrPages.length), { temperature: 0.3 }), onStatus));
+    const h = extractBlock(raw, 'HIGHLIGHT') || '';
+    highlights.push({ pageNum: p.pageNum, highlight: h.trim() || '(no highlight)' });
+  }
+  return highlights;
+}
+
+async function classifyImportance(
+  highlights: PageHighlight[],
+  callApi: TextCallFn,
+  onStatus?: (msg: string) => void,
+): Promise<Map<number, Importance>> {
+  onStatus?.('Classifying importance...');
+  const raw1 = stripWrapping(await callWithRetry(() => callApi(buildClassifyPrompt(highlights), { temperature: 0.2 }), onStatus));
+  let map = extractCategories(raw1, highlights);
+
+  // Coverage check: if <80% of items classified, retry once with stricter prompt.
+  const threshold = Math.floor(highlights.length * 0.8);
+  if (map.size < threshold) {
+    onStatus?.(`Classify coverage low (${map.size}/${highlights.length}); retrying...`);
+    const stricter = buildClassifyPrompt(highlights) + `\n\nIMPORTANT: your previous response was incomplete. You MUST emit exactly ${highlights.length} <<<CAT N>>> blocks, one for every item from 1 to ${highlights.length}. Do not skip any.`;
+    const raw2 = stripWrapping(await callWithRetry(() => callApi(stricter, { temperature: 0.2 }), onStatus));
+    const map2 = extractCategories(raw2, highlights);
+    if (map2.size > map.size) map = map2;
+  }
+
+  if (map.size < threshold) {
+    onStatus?.(`Warning: classify still incomplete (${map.size}/${highlights.length}); missing pages default to semi-filler.`);
+  }
+
+  // Fill missing pages with semi-filler default.
+  for (const h of highlights) {
+    if (!map.has(h.pageNum)) map.set(h.pageNum, 'semi-filler');
+  }
+  return map;
+}
+
+async function generateByImportance(
+  format: FormatType,
+  ocrPages: OcrPage[],
+  highlights: PageHighlight[],
+  importance: Map<number, Importance>,
+  callApi: TextCallFn,
+  voiceCard: string,
+  onStatus?: (msg: string) => void,
+): Promise<{ pages: GeneratedPage[]; sourceByOutput: Map<number, number> }> {
+  const pages: GeneratedPage[] = [];
+  const sourceByOutput = new Map<number, number>(); // output pageNumber → source pageNum
+  let outCounter = 0;
+
+  for (let i = 0; i < ocrPages.length; i++) {
+    const src = ocrPages[i];
+    const cat = importance.get(src.pageNum) || 'semi-filler';
+    onStatus?.(`Generating page ${i + 1}/${ocrPages.length} [${cat}] (source ${src.pageNum})...`);
+
+    const prompt = buildImportanceGenPrompt(format, src, cat, highlights, importance, voiceCard);
+    const raw = stripWrapping(await callWithRetry(() => callApi(prompt, { temperature: 0.6 }), onStatus));
+    let blocks = extractPageBlocks(raw);
+
+    if (blocks.length === 0 && cat !== 'filler') {
+      // Non-filler returning nothing — retry once with stricter prompt.
+      onStatus?.(`Empty non-filler page ${src.pageNum}; retrying with stricter prompt...`);
+      const stricter = prompt + `\n\nIMPORTANT: your previous response emitted zero pages. This source page is ${cat.toUpperCase()} and you MUST emit at least ONE <<<PAGE 1>>> block. Do not return empty.`;
+      const raw2 = stripWrapping(await callWithRetry(() => callApi(stricter, { temperature: 0.6 }), onStatus));
+      blocks = extractPageBlocks(raw2);
+      if (blocks.length === 0) {
+        onStatus?.(`Warning: ${cat} source page ${src.pageNum} produced no output after retry; story beat lost.`);
+        console.warn(`Importance gen returned zero pages for non-filler source ${src.pageNum} after retry`);
+      }
+    }
+
+    // Hard caps per category so a misbehaving model can't blow up output.
+    const maxByCategory = cat === 'filler' ? 1 : cat === 'semi-filler' ? 1 : 3;
+    if (blocks.length > maxByCategory) {
+      onStatus?.(`Warning: ${cat} source page ${src.pageNum} emitted ${blocks.length} pages; capping at ${maxByCategory}.`);
+    }
+    const capped = blocks.slice(0, maxByCategory);
+
+    for (const b of capped) {
+      outCounter++;
+      pages.push({ pageNumber: outCounter, content: b.content });
+      sourceByOutput.set(outCounter, src.pageNum);
+    }
+  }
+
+  return { pages, sourceByOutput };
+}
+
+function computePageSlicesFromSourceMap(
+  ocrPages: OcrPage[],
+  pages: GeneratedPage[],
+  sourceByOutput: Map<number, number>,
+): PageSlice[] {
+  return pages.map((p) => {
+    const srcNum = sourceByOutput.get(p.pageNumber) || p.pageNumber;
+    const srcPage = ocrPages.find((op) => op.pageNum === srcNum);
+    const sliceText = srcPage ? `Page ${srcPage.pageNum} start\n${srcPage.text}\nPage ${srcPage.pageNum} end` : '';
+    return { pageNumber: p.pageNumber, sliceStart: srcNum, sliceEnd: srcNum, sliceText };
+  });
+}
+
 // ---------- Batch orchestration ----------
 
 interface TextCallOpts {
@@ -931,6 +1151,72 @@ async function generateInBatches(
     } catch (e) {
       console.warn('Voice card generation failed, continuing without', e);
     }
+  }
+
+  // Strategy 5: Highlight-Driven Importance Map.
+  // Owns the entire generation path — replaces classic batch + per-page+smoothing.
+  // Semantic chunking is skipped (this strategy assigns its own importance per source page).
+  if (flags.highlightMap) {
+    const highlights = await extractHighlights(ocrPages, callApi, onStatus);
+    const importance = await classifyImportance(highlights, callApi, onStatus);
+    const storyCount = [...importance.values()].filter((c) => c === 'story').length;
+    const semiCount = [...importance.values()].filter((c) => c === 'semi-filler').length;
+    const fillerCount = [...importance.values()].filter((c) => c === 'filler').length;
+    onStatus?.(`Importance map ready: ${storyCount} story / ${semiCount} semi / ${fillerCount} filler.`);
+
+    // Short-circuit: if every page is filler, generation will produce ~0 pages and throw later.
+    // Bail early instead of burning N gen calls.
+    if (storyCount === 0 && semiCount === 0) {
+      throw new Error('Highlight-driven importance map classified every page as filler; nothing to generate.');
+    }
+
+    const { pages: rawPages, sourceByOutput } = await generateByImportance(format, ocrPages, highlights, importance, callApi, voiceCard, onStatus);
+    if (rawPages.length === 0) {
+      throw new Error('Highlight-driven generation produced zero pages');
+    }
+
+    // Metadata pass.
+    let title = '', author = '', summary = '';
+    try {
+      onStatus?.('Extracting title / author / summary...');
+      const metaPrompt = `Extract book metadata from the excerpts below.
+
+Use this EXACT text format:
+
+<<<TITLE>>>
+(book title)
+<<<END TITLE>>>
+
+<<<AUTHOR>>>
+(author name)
+<<<END AUTHOR>>>
+
+<<<SUMMARY>>>
+(100-150 word summary of the entire book)
+<<<END SUMMARY>>>
+
+--- BOOK START ---
+${ocrPages.slice(0, 3).map((p) => p.text).join('\n\n').substring(0, 3000)}
+
+--- BOOK END ---
+${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
+      const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
+      title = parsed.title || '';
+      author = parsed.author || '';
+      summary = parsed.summary || '';
+    } catch (e) {
+      console.warn('Metadata extraction failed', e);
+    }
+
+    const slices = computePageSlicesFromSourceMap(ocrPages, rawPages, sourceByOutput);
+    onStatus?.('Validating pages against source...');
+    let pages = await validateAndRepair(callApi, format, rawPages, slices, wordCountMax, onStatus, voiceCard);
+
+    if (flags.backCheck) {
+      pages = await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus);
+    }
+
+    return { title, author, summary, pages };
   }
 
   // Strategy 1: Semantic Chunking — detect narrative boundaries + allocate output pages.
