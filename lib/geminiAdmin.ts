@@ -1,4 +1,13 @@
 import { ocrPdf } from './openrouter';
+import {
+  saveProgress,
+  loadProgress,
+  clearProgress,
+  resolvePath,
+  flagsCompatible,
+  ProgressCtx,
+  ProgressState,
+} from './genProgress';
 
 const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
@@ -67,12 +76,14 @@ export interface GenerationResult {
 
 export interface StrategyFlags {
   semanticChunking?: boolean;
-  voiceCard?: boolean;
   perPageSmoothing?: boolean;
   backCheck?: boolean;
   highlightMap?: boolean;
   wordCountAllocation?: boolean;
 }
+
+// Voice card extraction is skipped for very small inputs — cost/benefit isn't worth it.
+const VOICE_CARD_MIN_PAGES = 3;
 
 type FormatType = 'mini' | 'pro' | 'ultra';
 
@@ -371,6 +382,7 @@ async function validateAndRepair(
   wordCountMax: number,
   onStatus?: (msg: string) => void,
   voiceCard: string = '',
+  progressCtx?: ProgressCtx,
 ): Promise<GeneratedPage[]> {
   const flaggedMap = new Map<number, string>();
 
@@ -401,13 +413,17 @@ async function validateAndRepair(
     throw e;
   }
 
-  if (flaggedMap.size === 0) return pages;
+  if (flaggedMap.size === 0) {
+    if (progressCtx) await saveProgress(progressCtx, { validatedPages: pages, lastCompletedPhase: 'validate' });
+    return pages;
+  }
 
   const result = [...pages];
+  let iter = 0;
   for (const [pageNumber, issue] of flaggedMap) {
     const slice = slices.find((s) => s.pageNumber === pageNumber);
     const idx = result.findIndex((p) => p.pageNumber === pageNumber);
-    if (!slice || idx < 0) continue;
+    if (!slice || idx < 0) { iter++; continue; }
     onStatus?.(`Repairing page ${pageNumber} — ${issue.substring(0, 60)}`);
     try {
       const parsed = await callWithRetry(() =>
@@ -422,7 +438,16 @@ async function validateAndRepair(
       console.warn(`Regen failed for page ${pageNumber}`, e);
       throw e;
     }
+    if (progressCtx) {
+      await saveProgress(progressCtx, {
+        validatedPages: result,
+        lastCompletedPhase: 'validate',
+        lastCompletedIndex: iter,
+      });
+    }
+    iter++;
   }
+  if (progressCtx) await saveProgress(progressCtx, { validatedPages: result, lastCompletedPhase: 'validate' });
   return result;
 }
 
@@ -542,16 +567,17 @@ ${sampleB}
 ${sampleC}`;
 }
 
-async function buildVoiceCard(ocrPages: OcrPage[], callApi: TextCallFn, onStatus?: (msg: string) => void): Promise<string> {
+async function buildVoiceCard(ocrPages: OcrPage[], callApi: TextCallFn, onStatus?: (msg: string) => void, progressCtx?: ProgressCtx): Promise<string> {
   if (ocrPages.length === 0) return '';
   const pick = (idx: number) => ocrPages[Math.max(0, Math.min(ocrPages.length - 1, idx))]?.text || '';
   const sampleA = pick(Math.floor(ocrPages.length * 0.1));
   const sampleB = pick(Math.floor(ocrPages.length * 0.5));
   const sampleC = pick(Math.floor(ocrPages.length * 0.9));
   onStatus?.('Extracting voice card...');
-  const raw = stripWrapping(await callApi(buildVoiceCardPrompt(sampleA, sampleB, sampleC), { temperature: 0.3 }));
-  const card = extractBlock(raw, 'VOICE') || '';
-  return card.trim();
+  const raw = stripWrapping(await callWithRetry(() => callApi(buildVoiceCardPrompt(sampleA, sampleB, sampleC), { temperature: 0.3 }), onStatus));
+  const card = (extractBlock(raw, 'VOICE') || '').trim();
+  if (progressCtx) await saveProgress(progressCtx, { voiceCard: card, lastCompletedPhase: 'voiceCard' });
+  return card;
 }
 
 function voiceCardBlock(card: string): string {
@@ -729,6 +755,8 @@ async function generatePerPage(
   callApi: TextCallFn,
   voiceCard: string,
   onStatus?: (msg: string) => void,
+  progressCtx?: ProgressCtx,
+  resumeFrom?: { startIdx: number; existingPages: GeneratedPage[] },
 ): Promise<GeneratedPage[]> {
   // Flatten allocations into per-output-page slices.
   interface PerPageTask { outPage: number; pdfStart: number; pdfEnd: number; sliceText: string; label?: string }
@@ -758,8 +786,9 @@ async function generatePerPage(
     }
   }
 
-  const pages: GeneratedPage[] = [];
-  for (let i = 0; i < tasks.length; i++) {
+  const startIdx = resumeFrom?.startIdx ?? 0;
+  const pages: GeneratedPage[] = resumeFrom?.existingPages ? [...resumeFrom.existingPages] : [];
+  for (let i = startIdx; i < tasks.length; i++) {
     const t = tasks[i];
     onStatus?.(`Per-page ${i + 1}/${tasks.length} — page ${t.outPage} (PDF ${t.pdfStart}-${t.pdfEnd})...`);
     const prompt = buildSinglePagePrompt(format, t.outPage, totalOutputPages, t.pdfStart, t.pdfEnd, t.sliceText, voiceCard, t.label);
@@ -767,6 +796,13 @@ async function generatePerPage(
     const content = typeof parsed?.content === 'string' ? parsed.content.trim() : '';
     if (!content) throw new Error(`Per-page generation returned empty content for page ${t.outPage}`);
     pages.push({ pageNumber: t.outPage, content });
+    if (progressCtx) {
+      await saveProgress(progressCtx, {
+        rawPages: pages,
+        lastCompletedPhase: 'perPageGen',
+        lastCompletedIndex: i,
+      });
+    }
   }
   return pages;
 }
@@ -777,13 +813,15 @@ async function smoothPages(
   callApi: TextCallFn,
   voiceCard: string,
   onStatus?: (msg: string) => void,
+  progressCtx?: ProgressCtx,
+  resumeChunkIdx: number = 0,
 ): Promise<GeneratedPage[]> {
   if (pages.length === 0) return pages;
   const result = pages.map((p) => ({ ...p }));
   const chunkSize = SMOOTHING_CHUNK_SIZE;
   const totalChunks = Math.ceil(result.length / chunkSize);
 
-  for (let ci = 0; ci < totalChunks; ci++) {
+  for (let ci = resumeChunkIdx; ci < totalChunks; ci++) {
     const startIdx = ci * chunkSize;
     const endIdx = Math.min(startIdx + chunkSize, result.length);
     const chunkPages = result.slice(startIdx, endIdx);
@@ -811,6 +849,13 @@ async function smoothPages(
       } else {
         console.warn(`Smoothing skipped page ${p.pageNumber} — no block found`);
       }
+    }
+    if (progressCtx) {
+      await saveProgress(progressCtx, {
+        smoothedPages: result,
+        lastCompletedPhase: 'smooth',
+        lastCompletedIndex: ci,
+      });
     }
   }
   return result;
@@ -859,9 +904,11 @@ async function backCheckAndRegen(
   callApi: TextCallFn,
   voiceCard: string,
   onStatus?: (msg: string) => void,
+  progressCtx?: ProgressCtx,
+  resumeFromIdx: number = 0,
 ): Promise<GeneratedPage[]> {
   const result = [...pages];
-  for (let i = 0; i < result.length; i++) {
+  for (let i = resumeFromIdx; i < result.length; i++) {
     const page = result[i];
     const slice = slices.find((s) => s.pageNumber === page.pageNumber);
     if (!slice) continue;
@@ -903,6 +950,13 @@ async function backCheckAndRegen(
           console.warn(`Back-check regen failed page ${page.pageNumber}`, e);
         }
       }
+    }
+    if (progressCtx) {
+      await saveProgress(progressCtx, {
+        backCheckedPages: result,
+        lastCompletedPhase: 'backCheck',
+        lastCompletedIndex: i,
+      });
     }
   }
   return result;
@@ -1021,14 +1075,24 @@ async function extractHighlights(
   ocrPages: OcrPage[],
   callApi: TextCallFn,
   onStatus?: (msg: string) => void,
+  progressCtx?: ProgressCtx,
+  resumeFrom?: { startIdx: number; existing: PageHighlight[] },
 ): Promise<PageHighlight[]> {
-  const highlights: PageHighlight[] = [];
-  for (let i = 0; i < ocrPages.length; i++) {
+  const startIdx = resumeFrom?.startIdx ?? 0;
+  const highlights: PageHighlight[] = resumeFrom?.existing ? [...resumeFrom.existing] : [];
+  for (let i = startIdx; i < ocrPages.length; i++) {
     const p = ocrPages[i];
     onStatus?.(`Extracting highlights ${i + 1}/${ocrPages.length} (page ${p.pageNum})...`);
     const raw = stripWrapping(await callWithRetry(() => callApi(buildHighlightPrompt(p, ocrPages.length), { temperature: 0.3 }), onStatus));
     const h = extractBlock(raw, 'HIGHLIGHT') || '';
     highlights.push({ pageNum: p.pageNum, highlight: h.trim() || '(no highlight)' });
+    if (progressCtx) {
+      await saveProgress(progressCtx, {
+        highlights,
+        lastCompletedPhase: 'highlight',
+        lastCompletedIndex: i,
+      });
+    }
   }
   return highlights;
 }
@@ -1071,12 +1135,15 @@ async function generateByImportance(
   callApi: TextCallFn,
   voiceCard: string,
   onStatus?: (msg: string) => void,
+  progressCtx?: ProgressCtx,
+  resumeFrom?: { startIdx: number; pages: GeneratedPage[]; sourceByOutput: Map<number, number> },
 ): Promise<{ pages: GeneratedPage[]; sourceByOutput: Map<number, number> }> {
-  const pages: GeneratedPage[] = [];
-  const sourceByOutput = new Map<number, number>(); // output pageNumber → source pageNum
-  let outCounter = 0;
+  const pages: GeneratedPage[] = resumeFrom?.pages ? [...resumeFrom.pages] : [];
+  const sourceByOutput = resumeFrom?.sourceByOutput ? new Map(resumeFrom.sourceByOutput) : new Map<number, number>();
+  let outCounter = pages.length;
+  const startIdx = resumeFrom?.startIdx ?? 0;
 
-  for (let i = 0; i < ocrPages.length; i++) {
+  for (let i = startIdx; i < ocrPages.length; i++) {
     const src = ocrPages[i];
     const cat = importance.get(src.pageNum) || 'semi-filler';
     onStatus?.(`Generating page ${i + 1}/${ocrPages.length} [${cat}] (source ${src.pageNum})...`);
@@ -1108,6 +1175,14 @@ async function generateByImportance(
       outCounter++;
       pages.push({ pageNumber: outCounter, content: b.content });
       sourceByOutput.set(outCounter, src.pageNum);
+    }
+    if (progressCtx) {
+      await saveProgress(progressCtx, {
+        rawPages: pages,
+        sourceByOutput: Array.from(sourceByOutput.entries()),
+        lastCompletedPhase: 'impGen',
+        lastCompletedIndex: i,
+      });
     }
   }
 
@@ -1277,6 +1352,8 @@ async function generateByWordCountAllocation(
   callApi: TextCallFn,
   voiceCard: string,
   onStatus?: (msg: string) => void,
+  progressCtx?: ProgressCtx,
+  resumeFrom?: { startIdx: number; pages: GeneratedPage[]; sourceByOutput: Map<number, number> },
 ): Promise<{ pages: GeneratedPage[]; sourceByOutput: Map<number, number> }> {
   // Filter zero-allocation pages — they're skipped entirely.
   const active = allocations.filter((a) => a.outCount > 0);
@@ -1285,11 +1362,12 @@ async function generateByWordCountAllocation(
     throw new Error('Word-count allocation produced zero output pages');
   }
 
-  const pages: GeneratedPage[] = [];
-  const sourceByOutput = new Map<number, number>();
-  let outCounter = 0;
+  const pages: GeneratedPage[] = resumeFrom?.pages ? [...resumeFrom.pages] : [];
+  const sourceByOutput = resumeFrom?.sourceByOutput ? new Map(resumeFrom.sourceByOutput) : new Map<number, number>();
+  let outCounter = pages.length;
+  const startIdx = resumeFrom?.startIdx ?? 0;
 
-  for (let i = 0; i < active.length; i++) {
+  for (let i = startIdx; i < active.length; i++) {
     const a = active[i];
     const src = ocrPages.find((p) => p.pageNum === a.sourcePage);
     if (!src) continue;
@@ -1326,6 +1404,14 @@ async function generateByWordCountAllocation(
       console.warn(`Word-count gen under-produced for source ${a.sourcePage}: got ${capped.length}/${a.outCount}`);
       onStatus?.(`Warning: source ${a.sourcePage} under-produced — got ${capped.length}/${a.outCount} pages.`);
     }
+    if (progressCtx) {
+      await saveProgress(progressCtx, {
+        rawPages: pages,
+        sourceByOutput: Array.from(sourceByOutput.entries()),
+        lastCompletedPhase: 'wcGen',
+        lastCompletedIndex: i,
+      });
+    }
   }
 
   return { pages, sourceByOutput };
@@ -1348,19 +1434,70 @@ async function generateInBatches(
   wordCountMax: number,
   onStatus?: (msg: string) => void,
   flags: StrategyFlags = {},
+  progressCtx?: ProgressCtx,
+): Promise<GenerationResult> {
+  try {
+    return await _generateInBatchesInner(ocrPages, format, callApi, wordCountMax, onStatus, flags, progressCtx);
+  } catch (err: any) {
+    const reason = err?.message || String(err);
+    if (progressCtx) {
+      // Persist failure marker. Don't await failures from save itself.
+      await saveProgress(progressCtx, { failedReason: reason });
+    }
+    throw err;
+  }
+}
+
+async function _generateInBatchesInner(
+  ocrPages: OcrPage[],
+  format: FormatType,
+  callApi: TextCallFn,
+  wordCountMax: number,
+  onStatus?: (msg: string) => void,
+  flags: StrategyFlags = {},
+  progressCtx?: ProgressCtx,
 ): Promise<GenerationResult> {
   const totalPdfPages = ocrPages.length;
   const expectedPages = computeExpectedPages(format, totalPdfPages);
 
-  // Strategy 2: Voice Card — one-shot pre-pass if enabled.
-  let voiceCard = '';
-  if (flags.voiceCard) {
+  // Ultra-only strategies: gate at the top so all downstream branches see corrected flags.
+  // Stored toggle state is preserved in AsyncStorage on the UI side; we just runtime-strip here.
+  if (format !== 'ultra') {
+    flags = { ...flags, semanticChunking: false, backCheck: false, highlightMap: false };
+  }
+
+  // Resume hydration: load existing progress + check path/flag compat.
+  let prior: ProgressState | null = null;
+  if (progressCtx) {
+    prior = await loadProgress(progressCtx.bookId, progressCtx.format);
+    if (prior && !flagsCompatible(prior.flags, flags, format)) {
+      // Path mismatch — silent reset.
+      await clearProgress(progressCtx);
+      prior = null;
+    }
+    const path = resolvePath(format, flags);
+    // Initialize/refresh progress meta.
+    await saveProgress(progressCtx, {
+      schemaVersion: 1,
+      startedAt: prior?.startedAt || Date.now(),
+      format: format as any,
+      flags,
+      path,
+      ocrPages: prior?.ocrPages || ocrPages.map((p) => ({ pageNum: p.pageNum, text: p.text })),
+    });
+  }
+
+  // Voice card — automatic first pass, runs in every gen path. Skipped for tiny inputs.
+  let voiceCard = prior?.voiceCard || '';
+  if (!voiceCard && ocrPages.length >= VOICE_CARD_MIN_PAGES) {
     try {
-      voiceCard = await buildVoiceCard(ocrPages, callApi, onStatus);
+      voiceCard = await buildVoiceCard(ocrPages, callApi, onStatus, progressCtx);
       if (voiceCard) onStatus?.(`Voice card ready (${voiceCard.length} chars).`);
     } catch (e) {
       console.warn('Voice card generation failed, continuing without', e);
     }
+  } else if (voiceCard) {
+    onStatus?.(`Resuming with cached voice card (${voiceCard.length} chars).`);
   }
 
   // Strategy 6: Word-Count Page Allocation.
@@ -1369,34 +1506,54 @@ async function generateInBatches(
   // with semanticChunking / perPageSmoothing / highlightMap (all override format size).
   if (flags.wordCountAllocation) {
     // Phase 0 — front/back matter trim.
-    const range = await detectBodyRange(ocrPages, callApi, onStatus);
-    const skippedFront = ocrPages.filter((p) => p.pageNum < range.startPage).length;
-    const skippedBack = ocrPages.filter((p) => p.pageNum > range.endPage).length;
-    const startLabel = range.startLabel ? ` (${range.startLabel})` : '';
-    const endLabel = range.endLabel ? ` (${range.endLabel})` : '';
-    onStatus?.(`Trim: starting at page ${range.startPage}${startLabel}, ending at page ${range.endPage}${endLabel}. Skipped ${skippedFront} front-matter + ${skippedBack} back-matter pages.`);
+    let range = prior?.bodyRange;
+    if (!range) {
+      range = await detectBodyRange(ocrPages, callApi, onStatus);
+      if (progressCtx) await saveProgress(progressCtx, { bodyRange: range, lastCompletedPhase: 'trim' });
+    }
+    const skippedFront = ocrPages.filter((p) => p.pageNum < range!.startPage).length;
+    const skippedBack = ocrPages.filter((p) => p.pageNum > range!.endPage).length;
+    const startLabel = range!.startLabel ? ` (${range!.startLabel})` : '';
+    const endLabel = range!.endLabel ? ` (${range!.endLabel})` : '';
+    onStatus?.(`Trim: starting at page ${range!.startPage}${startLabel}, ending at page ${range!.endPage}${endLabel}. Skipped ${skippedFront} front-matter + ${skippedBack} back-matter pages.`);
 
     // Phase 1 — word-count allocation (host-side).
-    const allocations = allocateByWordCount(ocrPages, range);
+    let allocations = prior?.allocations;
+    if (!allocations) {
+      allocations = allocateByWordCount(ocrPages, range!);
+      if (progressCtx) await saveProgress(progressCtx, { allocations, lastCompletedPhase: 'allocate' });
+    }
     const bodyCount = allocations.length;
     const outputCount = allocations.reduce((s, a) => s + a.outCount, 0);
-    onStatus?.(`Word-count plan: ${outputCount} output pages from ${bodyCount} body source pages (range ${range.startPage}-${range.endPage}).`);
+    onStatus?.(`Word-count plan: ${outputCount} output pages from ${bodyCount} body source pages (range ${range!.startPage}-${range!.endPage}).`);
 
     if (outputCount === 0) {
       throw new Error('Word-count allocation produced zero output pages — body is too sparse.');
     }
 
-    // Phase 2 — per-page generation honoring allocation.
-    const { pages: rawPages, sourceByOutput } = await generateByWordCountAllocation(format, ocrPages, allocations, callApi, voiceCard, onStatus);
+    // Phase 2 — per-page generation honoring allocation. Resume mid-loop if applicable.
+    const wcResumeFrom = prior?.lastCompletedPhase === 'wcGen' && prior.rawPages
+      ? {
+          startIdx: (prior.lastCompletedIndex ?? -1) + 1,
+          pages: prior.rawPages,
+          sourceByOutput: new Map(prior.sourceByOutput || []),
+        }
+      : undefined;
+    const { pages: rawPages, sourceByOutput } = await generateByWordCountAllocation(
+      format, ocrPages, allocations, callApi, voiceCard, onStatus, progressCtx, wcResumeFrom,
+    );
     if (rawPages.length === 0) {
       throw new Error('Word-count generation produced zero pages');
     }
 
     // Metadata pass.
-    let title = '', author = '', summary = '';
-    try {
-      onStatus?.('Extracting title / author / summary...');
-      const metaPrompt = `Extract book metadata from the excerpts below.
+    let title = prior?.meta?.title || '';
+    let author = prior?.meta?.author || '';
+    let summary = prior?.meta?.summary || '';
+    if (!prior?.meta) {
+      try {
+        onStatus?.('Extracting title / author / summary...');
+        const metaPrompt = `Extract book metadata from the excerpts below.
 
 Use this EXACT text format:
 
@@ -1417,27 +1574,40 @@ ${ocrPages.slice(0, 3).map((p) => p.text).join('\n\n').substring(0, 3000)}
 
 --- BOOK END ---
 ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
-      const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
-      title = parsed.title || '';
-      author = parsed.author || '';
-      summary = parsed.summary || '';
-    } catch (e) {
-      console.warn('Metadata extraction failed', e);
+        const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
+        title = parsed.title || '';
+        author = parsed.author || '';
+        summary = parsed.summary || '';
+        if (progressCtx) await saveProgress(progressCtx, { meta: { title, author, summary }, lastCompletedPhase: 'meta' });
+      } catch (e) {
+        console.warn('Metadata extraction failed', e);
+      }
     }
 
-    // Phase 3 — smoothing (reuse existing).
+    // Phase 3 — smoothing (reuse existing). Resume from chunk if applicable.
     onStatus?.('Smoothing pass...');
-    let pages = await smoothPages(format, rawPages, callApi, voiceCard, onStatus);
+    const smoothResume = prior?.lastCompletedPhase === 'smooth' && prior.smoothedPages
+      ? { pages: prior.smoothedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
+      : null;
+    let pages = smoothResume
+      ? await smoothPages(format, smoothResume.pages, callApi, voiceCard, onStatus, progressCtx, smoothResume.fromIdx)
+      : await smoothPages(format, rawPages, callApi, voiceCard, onStatus, progressCtx);
 
     // Validator + back-check use source-map slicing per output page.
     const slices = computePageSlicesFromSourceMap(ocrPages, pages, sourceByOutput);
     onStatus?.('Validating pages against source...');
-    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
 
     if (flags.backCheck) {
-      pages = await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus);
+      const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
+        ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
+        : null;
+      pages = bcResume
+        ? await backCheckAndRegen(format, bcResume.pages, slices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
+        : await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus, progressCtx);
     }
 
+    if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return { title, author, summary, pages };
   }
 
@@ -1445,8 +1615,26 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
   // Owns the entire generation path — replaces classic batch + per-page+smoothing.
   // Semantic chunking is skipped (this strategy assigns its own importance per source page).
   if (flags.highlightMap) {
-    const highlights = await extractHighlights(ocrPages, callApi, onStatus);
-    const importance = await classifyImportance(highlights, callApi, onStatus);
+    // Resume highlights mid-loop if applicable.
+    const hlResume = prior?.lastCompletedPhase === 'highlight' && prior.highlights
+      ? { startIdx: (prior.lastCompletedIndex ?? -1) + 1, existing: prior.highlights }
+      : prior?.highlights && (prior.lastCompletedPhase === 'classify' || prior.importance)
+        ? { startIdx: prior.highlights.length, existing: prior.highlights }
+        : undefined;
+    const highlights = await extractHighlights(ocrPages, callApi, onStatus, progressCtx, hlResume);
+
+    let importance: Map<number, Importance>;
+    if (prior?.importance && prior.importance.length > 0) {
+      importance = new Map(prior.importance.map((x) => [x.pageNum, x.category]));
+    } else {
+      importance = await classifyImportance(highlights, callApi, onStatus);
+      if (progressCtx) {
+        await saveProgress(progressCtx, {
+          importance: [...importance.entries()].map(([pageNum, category]) => ({ pageNum, category })),
+          lastCompletedPhase: 'classify',
+        });
+      }
+    }
     const storyCount = [...importance.values()].filter((c) => c === 'story').length;
     const semiCount = [...importance.values()].filter((c) => c === 'semi-filler').length;
     const fillerCount = [...importance.values()].filter((c) => c === 'filler').length;
@@ -1458,16 +1646,28 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       throw new Error('Highlight-driven importance map classified every page as filler; nothing to generate.');
     }
 
-    const { pages: rawPages, sourceByOutput } = await generateByImportance(format, ocrPages, highlights, importance, callApi, voiceCard, onStatus);
+    const impResume = prior?.lastCompletedPhase === 'impGen' && prior.rawPages
+      ? {
+          startIdx: (prior.lastCompletedIndex ?? -1) + 1,
+          pages: prior.rawPages,
+          sourceByOutput: new Map(prior.sourceByOutput || []),
+        }
+      : undefined;
+    const { pages: rawPages, sourceByOutput } = await generateByImportance(
+      format, ocrPages, highlights, importance, callApi, voiceCard, onStatus, progressCtx, impResume,
+    );
     if (rawPages.length === 0) {
       throw new Error('Highlight-driven generation produced zero pages');
     }
 
     // Metadata pass.
-    let title = '', author = '', summary = '';
-    try {
-      onStatus?.('Extracting title / author / summary...');
-      const metaPrompt = `Extract book metadata from the excerpts below.
+    let title = prior?.meta?.title || '';
+    let author = prior?.meta?.author || '';
+    let summary = prior?.meta?.summary || '';
+    if (!prior?.meta) {
+      try {
+        onStatus?.('Extracting title / author / summary...');
+        const metaPrompt = `Extract book metadata from the excerpts below.
 
 Use this EXACT text format:
 
@@ -1488,22 +1688,30 @@ ${ocrPages.slice(0, 3).map((p) => p.text).join('\n\n').substring(0, 3000)}
 
 --- BOOK END ---
 ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
-      const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
-      title = parsed.title || '';
-      author = parsed.author || '';
-      summary = parsed.summary || '';
-    } catch (e) {
-      console.warn('Metadata extraction failed', e);
+        const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
+        title = parsed.title || '';
+        author = parsed.author || '';
+        summary = parsed.summary || '';
+        if (progressCtx) await saveProgress(progressCtx, { meta: { title, author, summary }, lastCompletedPhase: 'meta' });
+      } catch (e) {
+        console.warn('Metadata extraction failed', e);
+      }
     }
 
     const slices = computePageSlicesFromSourceMap(ocrPages, rawPages, sourceByOutput);
     onStatus?.('Validating pages against source...');
-    let pages = await validateAndRepair(callApi, format, rawPages, slices, wordCountMax, onStatus, voiceCard);
+    let pages = await validateAndRepair(callApi, format, rawPages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
 
     if (flags.backCheck) {
-      pages = await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus);
+      const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
+        ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
+        : null;
+      pages = bcResume
+        ? await backCheckAndRegen(format, bcResume.pages, slices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
+        : await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus, progressCtx);
     }
 
+    if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return { title, author, summary, pages };
   }
 
@@ -1521,13 +1729,19 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
 
   // Strategy 3: Per-Page Generation + Chunked Smoothing path.
   if (flags.perPageSmoothing) {
-    let pages = await generatePerPage(format, ocrPages, allocations, expectedPages, callApi, voiceCard, onStatus);
+    const ppResume = prior?.lastCompletedPhase === 'perPageGen' && prior.rawPages
+      ? { startIdx: (prior.lastCompletedIndex ?? -1) + 1, existingPages: prior.rawPages }
+      : undefined;
+    let pages = await generatePerPage(format, ocrPages, allocations, expectedPages, callApi, voiceCard, onStatus, progressCtx, ppResume);
 
     // Extract title/author/summary — piggyback on voice card sample OR do a dedicated pass.
-    let title = '', author = '', summary = '';
-    try {
-      onStatus?.('Extracting title / author / summary...');
-      const metaPrompt = `Extract book metadata from the excerpts below.
+    let title = prior?.meta?.title || '';
+    let author = prior?.meta?.author || '';
+    let summary = prior?.meta?.summary || '';
+    if (!prior?.meta) {
+      try {
+        onStatus?.('Extracting title / author / summary...');
+        const metaPrompt = `Extract book metadata from the excerpts below.
 
 Use this EXACT text format:
 
@@ -1548,28 +1762,41 @@ ${ocrPages.slice(0, 3).map((p) => p.text).join('\n\n').substring(0, 3000)}
 
 --- BOOK END ---
 ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
-      const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
-      title = parsed.title || '';
-      author = parsed.author || '';
-      summary = parsed.summary || '';
-    } catch (e) {
-      console.warn('Metadata extraction failed', e);
+        const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
+        title = parsed.title || '';
+        author = parsed.author || '';
+        summary = parsed.summary || '';
+        if (progressCtx) await saveProgress(progressCtx, { meta: { title, author, summary }, lastCompletedPhase: 'meta' });
+      } catch (e) {
+        console.warn('Metadata extraction failed', e);
+      }
     }
 
     // Smoothing pass.
     onStatus?.('Smoothing pass...');
-    pages = await smoothPages(format, pages, callApi, voiceCard, onStatus);
+    const smoothResume = prior?.lastCompletedPhase === 'smooth' && prior.smoothedPages
+      ? { pages: prior.smoothedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
+      : null;
+    pages = smoothResume
+      ? await smoothPages(format, smoothResume.pages, callApi, voiceCard, onStatus, progressCtx, smoothResume.fromIdx)
+      : await smoothPages(format, pages, callApi, voiceCard, onStatus, progressCtx);
 
     // Validator still runs (word-cap + fabrication check).
     const slices = computePageSlicesFromAllocations(ocrPages, pages, allocations, expectedPages, totalPdfPages);
     onStatus?.('Validating pages against source...');
-    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
 
     // Strategy 4: Back-Check by Expansion.
     if (flags.backCheck) {
-      pages = await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus);
+      const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
+        ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
+        : null;
+      pages = bcResume
+        ? await backCheckAndRegen(format, bcResume.pages, slices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
+        : await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus, progressCtx);
     }
 
+    if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return { title, author, summary, pages };
   }
 
@@ -1597,12 +1824,18 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
 
     onStatus?.('Validating pages against source...');
     const slices = computePageSlices(ocrPages, pages, 1, totalPdfPages);
-    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
 
     if (flags.backCheck) {
-      pages = await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus);
+      const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
+        ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
+        : null;
+      pages = bcResume
+        ? await backCheckAndRegen(format, bcResume.pages, slices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
+        : await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus, progressCtx);
     }
 
+    if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return {
       title: parsed.title || '',
       author: parsed.author || '',
@@ -1649,13 +1882,26 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     }
   }
 
-  let title = '';
-  let author = '';
-  let summary = '';
-  const allPages: GeneratedPage[] = [];
+  let title = prior?.meta?.title || '';
+  let author = prior?.meta?.author || '';
+  let summary = prior?.meta?.summary || '';
+  // Resume from prior raw pages if same path (classic batch).
+  const startBatchIdx = (prior?.lastCompletedPhase === 'batchGen' && prior?.rawPages)
+    ? (prior.lastCompletedIndex ?? -1) + 1
+    : 0;
+  const allPages: GeneratedPage[] = startBatchIdx > 0 && prior?.rawPages ? [...prior.rawPages] : [];
   const allSlices: PageSlice[] = [];
 
-  for (let b = 0; b < batches.length; b++) {
+  // Recompute slices for already-completed batches so back-check has them.
+  if (startBatchIdx > 0) {
+    for (let b = 0; b < startBatchIdx && b < batches.length; b++) {
+      const { pdfStart, pdfEnd, startPage, endPage } = batches[b];
+      const completedPages = allPages.filter((p) => p.pageNumber >= startPage && p.pageNumber <= endPage);
+      allSlices.push(...computePageSlices(ocrPages, completedPages, pdfStart, pdfEnd));
+    }
+  }
+
+  for (let b = startBatchIdx; b < batches.length; b++) {
     const { startPage, endPage, count, pdfStart, pdfEnd, text } = batches[b];
     onStatus?.(`Batch ${b + 1}/${batches.length} — generating pages ${startPage}-${endPage} (PDF pages ${pdfStart}-${pdfEnd})...`);
 
@@ -1669,9 +1915,10 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
 
     if (b === 0) {
-      title = parsed.title || '';
-      author = parsed.author || '';
-      summary = parsed.summary || '';
+      title = parsed.title || title;
+      author = parsed.author || author;
+      summary = parsed.summary || summary;
+      if (progressCtx) await saveProgress(progressCtx, { meta: { title, author, summary } });
     }
 
     if (!Array.isArray(parsed?.pages) || parsed.pages.length === 0) {
@@ -1694,6 +1941,14 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
 
     allPages.push(...pages);
     allSlices.push(...slices);
+
+    if (progressCtx) {
+      await saveProgress(progressCtx, {
+        rawPages: allPages,
+        lastCompletedPhase: 'batchGen',
+        lastCompletedIndex: b,
+      });
+    }
   }
 
   if (allPages.length === 0) {
@@ -1704,9 +1959,15 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
 
   // Strategy 4: Back-Check by Expansion (classic path, batch-mode).
   if (flags.backCheck) {
-    finalPages = await backCheckAndRegen(format, finalPages, allSlices, callApi, voiceCard, onStatus);
+    const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
+      ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
+      : null;
+    finalPages = bcResume
+      ? await backCheckAndRegen(format, bcResume.pages, allSlices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
+      : await backCheckAndRegen(format, finalPages, allSlices, callApi, voiceCard, onStatus, progressCtx);
   }
 
+  if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
   return { title, author, summary, pages: finalPages };
 }
 
@@ -1806,19 +2067,33 @@ export async function generateFormatFromPdf(
   onStatus?: (msg: string) => void,
   wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
   flags: StrategyFlags = {},
+  bookId?: string,
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('Gemini API key not available');
 
-  onStatus?.('Extracting text from PDF...');
-  const ocrText = await ocrPdf(fileUri);
-  const ocrPages = parseOcrPages(ocrText);
-  if (ocrPages.length === 0) throw new Error('OCR returned no pages. The PDF may be empty or unreadable.');
+  const progressCtx: ProgressCtx | undefined = bookId ? { bookId, format } : undefined;
+
+  // Try to reuse cached OCR.
+  let ocrPages: OcrPage[] | null = null;
+  if (progressCtx) {
+    const prior = await loadProgress(progressCtx.bookId, progressCtx.format);
+    if (prior?.ocrPages && prior.ocrPages.length > 0 && (!prior.flags || flagsCompatible(prior.flags, flags, format))) {
+      ocrPages = prior.ocrPages.map((p) => ({ pageNum: p.pageNum, text: p.text }));
+      onStatus?.(`Resuming with cached OCR (${ocrPages.length} pages).`);
+    }
+  }
+  if (!ocrPages) {
+    onStatus?.('Extracting text from PDF...');
+    const ocrText = await ocrPdf(fileUri);
+    ocrPages = parseOcrPages(ocrText);
+    if (ocrPages.length === 0) throw new Error('OCR returned no pages. The PDF may be empty or unreadable.');
+  }
 
   const totalPages = ocrPages.length;
   const expected = computeExpectedPages(format, totalPages);
   onStatus?.(`${totalPages} pages extracted → generating ${expected} ${formatLabel(format)} pages...`);
 
-  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus, flags);
+  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus, flags, progressCtx);
 }
 
 export async function generateFormatFromPdfOpenRouter(
@@ -1829,21 +2104,33 @@ export async function generateFormatFromPdfOpenRouter(
   model?: string,
   wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
   flags: StrategyFlags = {},
+  bookId?: string,
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('OpenRouter API key not available');
 
   const useModel = model || OPENROUTER_MODEL;
+  const progressCtx: ProgressCtx | undefined = bookId ? { bookId, format } : undefined;
 
-  onStatus?.('Extracting text from PDF...');
-  const ocrText = await ocrPdf(fileUri);
-  const ocrPages = parseOcrPages(ocrText);
-  if (ocrPages.length === 0) throw new Error('OCR returned no pages. The PDF may be empty or unreadable.');
+  let ocrPages: OcrPage[] | null = null;
+  if (progressCtx) {
+    const prior = await loadProgress(progressCtx.bookId, progressCtx.format);
+    if (prior?.ocrPages && prior.ocrPages.length > 0 && (!prior.flags || flagsCompatible(prior.flags, flags, format))) {
+      ocrPages = prior.ocrPages.map((p) => ({ pageNum: p.pageNum, text: p.text }));
+      onStatus?.(`Resuming with cached OCR (${ocrPages.length} pages).`);
+    }
+  }
+  if (!ocrPages) {
+    onStatus?.('Extracting text from PDF...');
+    const ocrText = await ocrPdf(fileUri);
+    ocrPages = parseOcrPages(ocrText);
+    if (ocrPages.length === 0) throw new Error('OCR returned no pages. The PDF may be empty or unreadable.');
+  }
 
   const totalPages = ocrPages.length;
   const expected = computeExpectedPages(format, totalPages);
   onStatus?.(`${totalPages} pages extracted → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
 
-  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus, flags);
+  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus, flags, progressCtx);
 }
 
 // Generate mini/pro from an existing Full (ultra) version — skips OCR.
@@ -1858,6 +2145,7 @@ export async function generateFormatFromFull(
   onStatus?: (msg: string) => void,
   wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
   flags: StrategyFlags = {},
+  bookId?: string,
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('Gemini API key not available');
   if (format === 'ultra') throw new Error('Cannot generate Full from Full');
@@ -1867,7 +2155,8 @@ export async function generateFormatFromFull(
   const expected = computeExpectedPages(format, ocrPages.length);
   onStatus?.(`Using Full (${ocrPages.length} pages) → generating ${expected} ${formatLabel(format)} pages...`);
 
-  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus, flags);
+  const progressCtx: ProgressCtx | undefined = bookId ? { bookId, format } : undefined;
+  return generateInBatches(ocrPages, format, makeGeminiCall(apiKey), wordCountMax, onStatus, flags, progressCtx);
 }
 
 export async function generateFormatFromFullOpenRouter(
@@ -1878,6 +2167,7 @@ export async function generateFormatFromFullOpenRouter(
   model?: string,
   wordCountMax: number = DEFAULT_WORD_COUNT_MAX,
   flags: StrategyFlags = {},
+  bookId?: string,
 ): Promise<GenerationResult> {
   if (!apiKey) throw new Error('OpenRouter API key not available');
   if (format === 'ultra') throw new Error('Cannot generate Full from Full');
@@ -1888,5 +2178,6 @@ export async function generateFormatFromFullOpenRouter(
   const expected = computeExpectedPages(format, ocrPages.length);
   onStatus?.(`Using Full (${ocrPages.length} pages) → generating ${expected} ${formatLabel(format)} pages via OpenRouter (${useModel})...`);
 
-  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus, flags);
+  const progressCtx: ProgressCtx | undefined = bookId ? { bookId, format } : undefined;
+  return generateInBatches(ocrPages, format, makeOpenRouterCall(apiKey, useModel), wordCountMax, onStatus, flags, progressCtx);
 }

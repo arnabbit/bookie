@@ -22,11 +22,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL, useAuth } from '@/lib/AuthContext';
 import { colors, fonts, radius, shadows, FORMAT_DISPLAY } from '@/lib/theme';
 import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage, StrategyFlags, cancelCurrentBatchRequest, DEFAULT_WORD_COUNT_MAX } from '@/lib/geminiAdmin';
+import { clearProgress, loadProgress } from '@/lib/genProgress';
 
 const WORD_CAP_STORAGE_KEY = 'admin.wordCountMax';
 const STRATEGY_STORAGE_KEYS = {
   semanticChunking: 'admin.strategy.semanticChunking',
-  voiceCard: 'admin.strategy.voiceCard',
   perPageSmoothing: 'admin.strategy.perPageSmoothing',
   backCheck: 'admin.strategy.backCheck',
   highlightMap: 'admin.strategy.highlightMap',
@@ -91,17 +91,20 @@ export default function AdminScreen() {
   const [wordCountMaxText, setWordCountMaxText] = useState(String(DEFAULT_WORD_COUNT_MAX));
   // Strategy toggles (persisted)
   const [semanticChunking, setSemanticChunking] = useState(false);
-  const [voiceCard, setVoiceCard] = useState(false);
   const [perPageSmoothing, setPerPageSmoothing] = useState(false);
   const [backCheck, setBackCheck] = useState(false);
   const [highlightMap, setHighlightMap] = useState(false);
   const [wordCountAllocation, setWordCountAllocation] = useState(false);
   // Error popup
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Generation error modal (separate flow — supports retry/discard).
+  const [genError, setGenError] = useState<{ phase: string; message: string; canRetry: boolean } | null>(null);
+  type GenKind = 'pdfGemini' | 'pdfOR' | 'pdfORCustom' | 'fromFull' | 'fromFullOR' | 'fromFullORCustom';
+  type GenAttempt = { kind: GenKind; args: any } | null;
+  const lastGenAttemptRef = useRef<GenAttempt>(null);
 
   const strategyFlags: StrategyFlags = {
     semanticChunking,
-    voiceCard,
     perPageSmoothing,
     backCheck,
     highlightMap,
@@ -175,8 +178,6 @@ export default function AdminScreen() {
       try {
         const sc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.semanticChunking);
         if (sc != null) setSemanticChunking(sc === '1');
-        const vc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.voiceCard);
-        if (vc != null) setVoiceCard(vc === '1');
         const pp = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.perPageSmoothing);
         if (pp != null) setPerPageSmoothing(pp === '1');
         const bc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.backCheck);
@@ -190,7 +191,6 @@ export default function AdminScreen() {
   }, []);
 
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.semanticChunking, semanticChunking ? '1' : '0').catch(() => {}); }, [semanticChunking]);
-  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.voiceCard, voiceCard ? '1' : '0').catch(() => {}); }, [voiceCard]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.perPageSmoothing, perPageSmoothing ? '1' : '0').catch(() => {}); }, [perPageSmoothing]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.backCheck, backCheck ? '1' : '0').catch(() => {}); }, [backCheck]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.highlightMap, highlightMap ? '1' : '0').catch(() => {}); }, [highlightMap]);
@@ -283,59 +283,37 @@ export default function AdminScreen() {
     }
   };
 
-  // Generate with Gemini
-  const generateWithGemini = async () => {
-    if (!geminiKey) { showError('Server GEMINI_API_KEY not configured'); return; }
+  // Common runner for all generation flows. Threads bookId for progress persistence,
+  // captures errors into genError modal (Retry/Discard), tracks lastGenAttempt for retry.
+  const runGen = async (kind: GenKind, args: any) => {
+    if (!editingBook) return;
+    if (generating) return; // mutual exclusion
+    lastGenAttemptRef.current = { kind, args };
+    const bookId = editingBook._id;
+    const fmt = activeFormat;
+
+    setGenerating(true);
+    setGenError(null);
     try {
-      const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
-      if (result.canceled) return;
-      const file = result.assets[0];
-      if (!file) return;
-      if (file.size && file.size > 30 * 1024 * 1024) {
-        showError('PDF too large (max 30MB)');
-        return;
+      let gen;
+      if (kind === 'pdfGemini') {
+        gen = await generateFormatFromPdf(args.fileUri, geminiKey, fmt, setGenStatus, wordCountMax, strategyFlags, bookId);
+      } else if (kind === 'pdfOR') {
+        gen = await generateFormatFromPdfOpenRouter(args.fileUri, openRouterKey, fmt, setGenStatus, undefined, wordCountMax, strategyFlags, bookId);
+      } else if (kind === 'pdfORCustom') {
+        gen = await generateFormatFromPdfOpenRouter(args.fileUri, openRouterKey, fmt, setGenStatus, args.model, wordCountMax, strategyFlags, bookId);
+      } else if (kind === 'fromFull') {
+        const fullPages = editingBook.formats.ultra || [];
+        gen = await generateFormatFromFull(fullPages, geminiKey, fmt, setGenStatus, wordCountMax, strategyFlags, bookId);
+      } else if (kind === 'fromFullOR') {
+        const fullPages = editingBook.formats.ultra || [];
+        gen = await generateFormatFromFullOpenRouter(fullPages, openRouterKey, fmt, setGenStatus, undefined, wordCountMax, strategyFlags, bookId);
+      } else if (kind === 'fromFullORCustom') {
+        const fullPages = editingBook.formats.ultra || [];
+        gen = await generateFormatFromFullOpenRouter(fullPages, openRouterKey, fmt, setGenStatus, args.model, wordCountMax, strategyFlags, bookId);
+      } else {
+        throw new Error(`Unknown gen kind: ${kind}`);
       }
-
-      setGenerating(true);
-      setGenStatus('Starting...');
-
-      const gen = await generateFormatFromPdf(file.uri, geminiKey, activeFormat, setGenStatus, wordCountMax, strategyFlags);
-
-      // If book has no summary yet, use the generated one
-      if (!metaSummary && gen.summary) {
-        setMetaSummary(gen.summary);
-      }
-      // If title/author empty, use generated
-      if (!metaTitle && gen.title) setMetaTitle(gen.title);
-      if (!metaAuthor && gen.author) setMetaAuthor(gen.author);
-
-      setPreviewPages(gen.pages);
-      setGenStatus(`Generated ${gen.pages.length} pages. Review and save.`);
-    } catch (err: any) {
-      showError(`Generation Failed: ${err.message || 'Unknown error'}`);
-      setGenStatus('');
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  // Generate with Gemini via OpenRouter
-  const generateWithOpenRouter = async () => {
-    if (!openRouterKey) { showError('Server OPENROUTER_API_KEY not configured'); return; }
-    try {
-      const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
-      if (result.canceled) return;
-      const file = result.assets[0];
-      if (!file) return;
-      if (file.size && file.size > 30 * 1024 * 1024) {
-        showError('PDF too large (max 30MB)');
-        return;
-      }
-
-      setGenerating(true);
-      setGenStatus('Starting (OpenRouter)...');
-
-      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, undefined, wordCountMax, strategyFlags);
 
       if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
       if (!metaTitle && gen.title) setMetaTitle(gen.title);
@@ -343,45 +321,86 @@ export default function AdminScreen() {
 
       setPreviewPages(gen.pages);
       setGenStatus(`Generated ${gen.pages.length} pages. Review and save.`);
+
+      // Success — clear progress + attempt.
+      await clearProgress({ bookId, format: fmt });
+      lastGenAttemptRef.current = null;
     } catch (err: any) {
-      showError(`Generation Failed: ${err.message || 'Unknown error'}`);
+      console.warn('[admin] gen failed', err);
+      // Look up phase from persisted progress for richer error message.
+      let phase = 'unknown';
+      try {
+        const prog = await loadProgress(bookId, fmt);
+        if (prog?.lastCompletedPhase) phase = `after ${prog.lastCompletedPhase}`;
+      } catch {}
       setGenStatus('');
+      setGenError({
+        phase,
+        message: err?.message || 'Unknown error',
+        canRetry: true,
+      });
     } finally {
       setGenerating(false);
     }
+  };
+
+  const retryGen = async () => {
+    const attempt = lastGenAttemptRef.current;
+    if (!attempt) {
+      setGenError(null);
+      return;
+    }
+    setGenError(null);
+    await runGen(attempt.kind, attempt.args);
+  };
+
+  const discardGen = async () => {
+    if (editingBook) {
+      await clearProgress({ bookId: editingBook._id, format: activeFormat });
+    }
+    lastGenAttemptRef.current = null;
+    setGenError(null);
+    setGenStatus('');
+  };
+
+  const pickPdf = async (): Promise<{ uri: string } | null> => {
+    const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
+    if (result.canceled) return null;
+    const file = result.assets[0];
+    if (!file) return null;
+    if (file.size && file.size > 30 * 1024 * 1024) {
+      showError('PDF too large (max 30MB)');
+      return null;
+    }
+    return { uri: file.uri };
+  };
+
+  // Generate with Gemini
+  const generateWithGemini = async () => {
+    if (!geminiKey) { showError('Server GEMINI_API_KEY not configured'); return; }
+    const file = await pickPdf();
+    if (!file) return;
+    setGenStatus('Starting...');
+    await runGen('pdfGemini', { fileUri: file.uri });
+  };
+
+  // Generate with Gemini via OpenRouter
+  const generateWithOpenRouter = async () => {
+    if (!openRouterKey) { showError('Server OPENROUTER_API_KEY not configured'); return; }
+    const file = await pickPdf();
+    if (!file) return;
+    setGenStatus('Starting (OpenRouter)...');
+    await runGen('pdfOR', { fileUri: file.uri });
   };
 
   // Generate with custom OpenRouter model
   const generateWithCustomOpenRouter = async () => {
     if (!openRouterKey) { showError('Server OPENROUTER_API_KEY not configured'); return; }
     if (!customModel.trim()) { showError('Enter a model name'); return; }
-    try {
-      const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
-      if (result.canceled) return;
-      const file = result.assets[0];
-      if (!file) return;
-      if (file.size && file.size > 30 * 1024 * 1024) {
-        showError('PDF too large (max 30MB)');
-        return;
-      }
-
-      setGenerating(true);
-      setGenStatus(`Starting (${customModel})...`);
-
-      const gen = await generateFormatFromPdfOpenRouter(file.uri, openRouterKey, activeFormat, setGenStatus, customModel.trim(), wordCountMax, strategyFlags);
-
-      if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
-      if (!metaTitle && gen.title) setMetaTitle(gen.title);
-      if (!metaAuthor && gen.author) setMetaAuthor(gen.author);
-
-      setPreviewPages(gen.pages);
-      setGenStatus(`Generated ${gen.pages.length} pages. Review and save.`);
-    } catch (err: any) {
-      showError(`Generation Failed: ${err.message || 'Unknown error'}`);
-      setGenStatus('');
-    } finally {
-      setGenerating(false);
-    }
+    const file = await pickPdf();
+    if (!file) return;
+    setGenStatus(`Starting (${customModel})...`);
+    await runGen('pdfORCustom', { fileUri: file.uri, model: customModel.trim() });
   };
 
   // Generate mini/pro from existing Full (skips PDF upload)
@@ -393,25 +412,12 @@ export default function AdminScreen() {
     const key = useOpenRouter ? openRouterKey : geminiKey;
     if (!key) { showError(`Server ${useOpenRouter ? 'OPENROUTER' : 'GEMINI'}_API_KEY not configured`); return; }
 
-    try {
-      setGenerating(true);
-      setGenStatus('Starting from Full...');
-
-      const gen = useOpenRouter
-        ? await generateFormatFromFullOpenRouter(fullPages, openRouterKey, activeFormat, setGenStatus, model, wordCountMax, strategyFlags)
-        : await generateFormatFromFull(fullPages, geminiKey, activeFormat, setGenStatus, wordCountMax, strategyFlags);
-
-      if (!metaSummary && gen.summary) setMetaSummary(gen.summary);
-      if (!metaTitle && gen.title) setMetaTitle(gen.title);
-      if (!metaAuthor && gen.author) setMetaAuthor(gen.author);
-
-      setPreviewPages(gen.pages);
-      setGenStatus(`Generated ${gen.pages.length} pages from Full. Review and save.`);
-    } catch (err: any) {
-      showError(`Generation Failed: ${err.message || 'Unknown error'}`);
-      setGenStatus('');
-    } finally {
-      setGenerating(false);
+    setGenStatus('Starting from Full...');
+    if (useOpenRouter) {
+      if (model) await runGen('fromFullORCustom', { model });
+      else await runGen('fromFullOR', {});
+    } else {
+      await runGen('fromFull', {});
     }
   };
 
@@ -739,22 +745,7 @@ export default function AdminScreen() {
             {/* Strategy Toggles */}
             <View style={s.strategyBox}>
               <Text style={s.sectionLabel}>Processing Strategies</Text>
-
-              <View style={s.strategyRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.strategyLabel}>Semantic Chunking</Text>
-                  <Text style={s.strategyHint}>Split on scene/chapter boundaries; allocate pages by importance</Text>
-                </View>
-                <Switch value={semanticChunking} onValueChange={setSemanticChunking} disabled={generating} />
-              </View>
-
-              <View style={s.strategyRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.strategyLabel}>Voice Card</Text>
-                  <Text style={s.strategyHint}>Pre-pass style card injected into every prompt</Text>
-                </View>
-                <Switch value={voiceCard} onValueChange={setVoiceCard} disabled={generating} />
-              </View>
+              <Text style={s.strategyNote}>Voice card (style extraction) runs automatically before generation in every method.</Text>
 
               <View style={s.strategyRow}>
                 <View style={{ flex: 1 }}>
@@ -766,8 +757,27 @@ export default function AdminScreen() {
 
               <View style={s.strategyRow}>
                 <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Word-Count Allocation</Text>
+                  <Text style={s.strategyHint}>Auto-trim front/back matter (LLM), then allocate output pages per source page by word count (÷240, &lt;0.4 floor else ceil). Per-page gen + smoothing. Format selector still controls writing-style rules, but output page count is driven by source word count + auto front/back trim (not by mini/pro/ultra). Overrides Per-Page+Smoothing.</Text>
+                </View>
+                <Switch value={wordCountAllocation} onValueChange={setWordCountAllocation} disabled={generating} />
+              </View>
+
+              <Text style={s.strategySubhead}>Ultra-only strategies</Text>
+              <Text style={s.strategyNote}>These strategies only run when generating Ultra format. Toggle state is preserved across formats but ignored at runtime for Mini/Pro.</Text>
+
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Semantic Chunking</Text>
+                  <Text style={s.strategyHint}>Split on scene/chapter boundaries; allocate pages by importance. Affects classic batch grouping only — composes with other toggles.</Text>
+                </View>
+                <Switch value={semanticChunking} onValueChange={setSemanticChunking} disabled={generating} />
+              </View>
+
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
                   <Text style={s.strategyLabel}>Back-Check by Expansion</Text>
-                  <Text style={s.strategyHint}>Expand drafted pages, judge vs source, regen on large delta</Text>
+                  <Text style={s.strategyHint}>Expand drafted pages, judge vs source, regen on large delta. Runs after generation — composes with other toggles.</Text>
                 </View>
                 <Switch value={backCheck} onValueChange={setBackCheck} disabled={generating} />
               </View>
@@ -775,17 +785,9 @@ export default function AdminScreen() {
               <View style={s.strategyRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={s.strategyLabel}>Highlight-Driven Map</Text>
-                  <Text style={s.strategyHint}>Per-page highlight → classify story/filler → importance-aware gen. Output page count is variable (story pages may expand). Overrides Per-Page+Smoothing and Semantic Chunking. Note: format selector still controls writing-style rules, but output page count is driven by per-page importance (not by mini/pro/ultra).</Text>
+                  <Text style={s.strategyHint}>Per-page highlight → classify story/filler → importance-aware gen. Output page count is variable (story pages may expand). Overrides Per-Page+Smoothing and Semantic Chunking. Mutually exclusive w/ Word-Count Allocation (Word-Count wins). Format selector still controls writing-style rules, but output page count is driven by per-page importance.</Text>
                 </View>
                 <Switch value={highlightMap} onValueChange={setHighlightMap} disabled={generating} />
-              </View>
-
-              <View style={s.strategyRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.strategyLabel}>Word-Count Allocation</Text>
-                  <Text style={s.strategyHint}>Auto-trim front/back matter (LLM), then allocate output pages per source page by word count (÷240, &lt;0.4 floor else ceil). Per-page gen + smoothing. Format selector still controls writing-style rules, but output page count is driven by source word count + auto front/back trim (not by mini/pro/ultra). Overrides Semantic Chunking, Per-Page+Smoothing, and Highlight-Driven Map.</Text>
-                </View>
-                <Switch value={wordCountAllocation} onValueChange={setWordCountAllocation} disabled={generating} />
               </View>
             </View>
 
@@ -869,6 +871,15 @@ export default function AdminScreen() {
       {/* Error Modal */}
       <ErrorModal message={errorMsg} onClose={() => setErrorMsg(null)} />
 
+      {/* Gen Error Modal — Retry/Discard/Dismiss */}
+      <GenErrorModal
+        error={genError}
+        canRetry={!!lastGenAttemptRef.current}
+        onRetry={retryGen}
+        onDiscard={discardGen}
+        onDismiss={() => setGenError(null)}
+      />
+
       {/* Page Edit Modal */}
       <Modal visible={editingPageIdx !== null} transparent animationType="slide">
         <View style={s.modalOverlay}>
@@ -897,6 +908,52 @@ export default function AdminScreen() {
         </View>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+function GenErrorModal({
+  error,
+  canRetry,
+  onRetry,
+  onDiscard,
+  onDismiss,
+}: {
+  error: { phase: string; message: string; canRetry: boolean } | null;
+  canRetry: boolean;
+  onRetry: () => void;
+  onDiscard: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <Modal visible={!!error} transparent animationType="fade" onRequestClose={onDismiss}>
+      <View style={s.modalOverlay}>
+        <View style={s.errorCard}>
+          <View style={s.errorHeader}>
+            <Ionicons name="alert-circle" size={22} color={colors.error} />
+            <Text style={s.errorTitle}>Generation failed{error?.phase ? ` ${error.phase}` : ''}</Text>
+          </View>
+          <ScrollView style={s.errorBodyScroll}>
+            <Text style={s.errorMsg} selectable>{error?.message}</Text>
+            <Text style={[s.errorMsg, { marginTop: 8, fontSize: 12, color: colors.onSurfaceVariant }]}>
+              Retry resumes from the last completed step. Discard clears saved progress and starts fresh next time. Dismiss closes this dialog and keeps progress.
+            </Text>
+          </ScrollView>
+          <View style={s.modalBtns}>
+            <TouchableOpacity style={[s.modalCancel, { flex: 1 }]} onPress={onDiscard}>
+              <Text style={s.modalCancelText}>Discard</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.modalCancel, { flex: 1 }]} onPress={onDismiss}>
+              <Text style={s.modalCancelText}>Dismiss</Text>
+            </TouchableOpacity>
+            {canRetry && (
+              <TouchableOpacity style={[s.modalConfirm, { flex: 1 }]} onPress={onRetry}>
+                <Text style={s.modalConfirmText}>Retry</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -1046,6 +1103,17 @@ const s = StyleSheet.create({
   },
   strategyLabel: { fontFamily: fonts.bodySemiBold, fontSize: 13, color: colors.onSurface },
   strategyHint: { fontFamily: fonts.body, fontSize: 11, color: colors.onSurfaceVariant, marginTop: 2 },
+  strategyNote: { fontFamily: fonts.body, fontSize: 11, color: colors.onSurfaceVariant, marginBottom: 4, fontStyle: 'italic' },
+  strategySubhead: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+    color: colors.onSurfaceVariant,
+    marginTop: 14,
+    marginBottom: 4,
+  },
   actionBtn: {
     flex: 1,
     flexDirection: 'row',
