@@ -81,7 +81,7 @@ const SMOOTHING_CHUNK_SIZE = 5;
 const BACK_CHECK_DELTA_THRESHOLD = 0.5; // judge score below this triggers regen
 const BACK_CHECK_MAX_REGENS = 1; // regen each flagged page at most once
 const WORD_COUNT_DIVISOR = 240;
-const WORD_COUNT_ROUND_THRESHOLD = 0.4;
+const WORD_COUNT_ROUND_THRESHOLD = 0.3;
 // Front/back matter lives at edges — sample only N pages from each side when source exceeds threshold to avoid context bloat.
 const TRIM_PREVIEW_EDGE_THRESHOLD = 100;
 const TRIM_PREVIEW_EDGE_SIZE = 50;
@@ -1228,7 +1228,8 @@ function allocateByWordCount(ocrPages: OcrPage[], range: BodyRange): { sourcePag
     const remainder = words % WORD_COUNT_DIVISOR;
     const quotient = Math.floor(words / WORD_COUNT_DIVISOR);
     const frac = remainder / WORD_COUNT_DIVISOR;
-    const outCount = frac < WORD_COUNT_ROUND_THRESHOLD ? quotient : quotient + 1;
+    const rounded = frac < WORD_COUNT_ROUND_THRESHOLD ? quotient : quotient + 1;
+    const outCount = Math.max(1, rounded); // body pages always produce at least 1 output
     out.push({ sourcePage: p.pageNum, outCount, words });
   }
   return out;
