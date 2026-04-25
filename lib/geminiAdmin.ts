@@ -71,6 +71,7 @@ export interface StrategyFlags {
   perPageSmoothing?: boolean;
   backCheck?: boolean;
   highlightMap?: boolean;
+  wordCountAllocation?: boolean;
 }
 
 type FormatType = 'mini' | 'pro' | 'ultra';
@@ -79,6 +80,11 @@ type FormatType = 'mini' | 'pro' | 'ultra';
 const SMOOTHING_CHUNK_SIZE = 5;
 const BACK_CHECK_DELTA_THRESHOLD = 0.5; // judge score below this triggers regen
 const BACK_CHECK_MAX_REGENS = 1; // regen each flagged page at most once
+const WORD_COUNT_DIVISOR = 240;
+const WORD_COUNT_ROUND_THRESHOLD = 0.4;
+// Front/back matter lives at edges — sample only N pages from each side when source exceeds threshold to avoid context bloat.
+const TRIM_PREVIEW_EDGE_THRESHOLD = 100;
+const TRIM_PREVIEW_EDGE_SIZE = 50;
 
 // ---------- OCR page parser ----------
 
@@ -1121,6 +1127,209 @@ function computePageSlicesFromSourceMap(
   });
 }
 
+// ---------- Strategy 6: Word-Count Page Allocation ----------
+
+interface BodyRange {
+  startPage: number;
+  endPage: number;
+  startLabel?: string;
+  endLabel?: string;
+}
+
+function buildBodyTrimPrompt(ocrPages: OcrPage[]): string {
+  const formatPreview = (p: OcrPage) => `P${p.pageNum}: ${p.text.substring(0, 200).replace(/\s+/g, ' ')}`;
+  let previews: string;
+  if (ocrPages.length > TRIM_PREVIEW_EDGE_THRESHOLD) {
+    const head = ocrPages.slice(0, TRIM_PREVIEW_EDGE_SIZE);
+    const tail = ocrPages.slice(ocrPages.length - TRIM_PREVIEW_EDGE_SIZE);
+    const gapStart = head[head.length - 1].pageNum + 1;
+    const gapEnd = tail[0].pageNum - 1;
+    previews = [
+      ...head.map(formatPreview),
+      `[... pages ${gapStart}-${gapEnd} skipped (front/back matter is at edges) ...]`,
+      ...tail.map(formatPreview),
+    ].join('\n');
+  } else {
+    previews = ocrPages.map(formatPreview).join('\n');
+  }
+  const last = ocrPages.length > 0 ? ocrPages[ocrPages.length - 1].pageNum : 1;
+  const first = ocrPages.length > 0 ? ocrPages[0].pageNum : 1;
+  return `You are a book structure analyst. Identify the boundaries of the actual book content (the body) — i.e. skip front matter and back matter.
+
+FRONT MATTER to skip: cover, copyright, dedication, table of contents, list of figures, acknowledgments, blurbs.
+BODY starts at the FIRST of: preface, foreword, introduction, prologue, chapter 1 — whichever comes first.
+BODY ends at the LAST of: last chapter, epilogue, afterword — before any index, bibliography, references, glossary, notes, about-the-author, ads.
+
+Use this EXACT text format. No JSON, no code fences, no text outside markers. Page numbers must be integers between ${first} and ${last}.
+
+<<<START>>>
+page: <integer>
+label: <short label, e.g. "preface" or "chapter 1">
+<<<END START>>>
+
+<<<END_RANGE>>>
+page: <integer>
+label: <short label, e.g. "epilogue" or "chapter 24">
+<<<END END_RANGE>>>
+
+--- PAGE PREVIEWS ---
+${previews}`;
+}
+
+function extractBodyRange(raw: string, fallbackStart: number, fallbackEnd: number): BodyRange {
+  const startBlock = extractBlock(raw, 'START') || '';
+  const endBlock = extractBlock(raw, 'END_RANGE') || '';
+  const startPage = parseInt(startBlock.match(/page\s*:\s*(\d+)/i)?.[1] || '0', 10);
+  const endPage = parseInt(endBlock.match(/page\s*:\s*(\d+)/i)?.[1] || '0', 10);
+  const startLabel = (startBlock.match(/label\s*:\s*([^\n]+)/i)?.[1] || '').trim();
+  const endLabel = (endBlock.match(/label\s*:\s*([^\n]+)/i)?.[1] || '').trim();
+
+  // Validate — require sane integers within bounds and start <= end.
+  const validStart = startPage >= fallbackStart && startPage <= fallbackEnd;
+  const validEnd = endPage >= fallbackStart && endPage <= fallbackEnd && endPage >= startPage;
+  if (!validStart || !validEnd) {
+    return { startPage: fallbackStart, endPage: fallbackEnd };
+  }
+  return { startPage, endPage, startLabel, endLabel };
+}
+
+async function detectBodyRange(
+  ocrPages: OcrPage[],
+  callApi: TextCallFn,
+  onStatus?: (msg: string) => void,
+): Promise<BodyRange> {
+  if (ocrPages.length === 0) return { startPage: 1, endPage: 1 };
+  const first = ocrPages[0].pageNum;
+  const last = ocrPages[ocrPages.length - 1].pageNum;
+  onStatus?.('Trim: detecting front/back matter...');
+  try {
+    const raw = stripWrapping(await callApi(buildBodyTrimPrompt(ocrPages), { temperature: 0.2 }));
+    return extractBodyRange(raw, first, last);
+  } catch (e) {
+    console.warn('Body-range detection failed, using full range', e);
+    onStatus?.('Trim: detection failed, using full range.');
+    return { startPage: first, endPage: last };
+  }
+}
+
+interface WordCountTask {
+  outPage: number; // assigned later (sequential)
+  sourcePage: number;
+  outCount: number; // pages this source produces
+  sliceText: string;
+}
+
+function allocateByWordCount(ocrPages: OcrPage[], range: BodyRange): { sourcePage: number; outCount: number; words: number }[] {
+  const out: { sourcePage: number; outCount: number; words: number }[] = [];
+  for (const p of ocrPages) {
+    if (p.pageNum < range.startPage || p.pageNum > range.endPage) continue;
+    const words = countWords(p.text);
+    // Integer-mod path — avoids float subtraction (e.g. 336/240 frac landing at 0.39999... instead of 0.4).
+    const remainder = words % WORD_COUNT_DIVISOR;
+    const quotient = Math.floor(words / WORD_COUNT_DIVISOR);
+    const frac = remainder / WORD_COUNT_DIVISOR;
+    const outCount = frac < WORD_COUNT_ROUND_THRESHOLD ? quotient : quotient + 1;
+    out.push({ sourcePage: p.pageNum, outCount, words });
+  }
+  return out;
+}
+
+function buildWordCountSinglePagePrompt(
+  format: FormatType,
+  outPage: number,
+  totalOutputPages: number,
+  sourcePage: number,
+  pagesToProduce: number,
+  sliceText: string,
+  voiceCard: string,
+): string {
+  const countDirective = pagesToProduce === 1
+    ? `Produce EXACTLY ONE output page covering this source page.`
+    : `Produce EXACTLY ${pagesToProduce} output pages covering this source page. Split the source content evenly across the ${pagesToProduce} pages — each must cover a distinct portion in reading order.`;
+
+  const outNumbering = pagesToProduce === 1
+    ? `<<<PAGE ${outPage}>>>\n(60-80 word content)\n<<<END PAGE ${outPage}>>>`
+    : Array.from({ length: pagesToProduce }, (_, i) =>
+        `<<<PAGE ${outPage + i}>>>\n(60-80 word content)\n<<<END PAGE ${outPage + i}>>>`,
+      ).join('\n\n');
+
+  return `You are a literary condensation engine. You are generating output ${pagesToProduce === 1 ? 'page' : `pages ${outPage}-${outPage + pagesToProduce - 1}`} of ${totalOutputPages} for a condensed book version (allocation derived from source word count).
+
+This output corresponds to source PDF page ${sourcePage}. ${countDirective}
+
+STRICT WORD COUNT: each output page MUST be 60-80 words.
+
+${qualityRules(format)}${voiceCardBlock(voiceCard)}
+
+Use this EXACT text format. No JSON, no code fences, no text outside markers.
+
+${outNumbering}
+
+--- SOURCE PAGE ${sourcePage} ---
+${sliceText}`;
+}
+
+async function generateByWordCountAllocation(
+  format: FormatType,
+  ocrPages: OcrPage[],
+  allocations: { sourcePage: number; outCount: number; words: number }[],
+  callApi: TextCallFn,
+  voiceCard: string,
+  onStatus?: (msg: string) => void,
+): Promise<{ pages: GeneratedPage[]; sourceByOutput: Map<number, number> }> {
+  // Filter zero-allocation pages — they're skipped entirely.
+  const active = allocations.filter((a) => a.outCount > 0);
+  const totalOutputPages = active.reduce((s, a) => s + a.outCount, 0);
+  if (totalOutputPages === 0) {
+    throw new Error('Word-count allocation produced zero output pages');
+  }
+
+  const pages: GeneratedPage[] = [];
+  const sourceByOutput = new Map<number, number>();
+  let outCounter = 0;
+
+  for (let i = 0; i < active.length; i++) {
+    const a = active[i];
+    const src = ocrPages.find((p) => p.pageNum === a.sourcePage);
+    if (!src) continue;
+    const sliceText = `Page ${src.pageNum} start\n${src.text}\nPage ${src.pageNum} end`;
+    const startOut = outCounter + 1;
+
+    onStatus?.(`Generating page ${i + 1}/${active.length} (source ${a.sourcePage}, ${a.words} words → ${a.outCount} pages)...`);
+
+    const prompt = buildWordCountSinglePagePrompt(format, startOut, totalOutputPages, a.sourcePage, a.outCount, sliceText, voiceCard);
+    const raw = stripWrapping(await callWithRetry(() => callApi(prompt, { temperature: 0.6 }), onStatus));
+    let blocks = extractPageBlocks(raw);
+
+    if (blocks.length === 0) {
+      // Retry once with stricter prompt.
+      onStatus?.(`Empty response for source ${a.sourcePage}; retrying...`);
+      const stricter = prompt + `\n\nIMPORTANT: your previous response emitted zero pages. You MUST emit exactly ${a.outCount} <<<PAGE N>>> blocks.`;
+      const raw2 = stripWrapping(await callWithRetry(() => callApi(stricter, { temperature: 0.6 }), onStatus));
+      blocks = extractPageBlocks(raw2);
+      if (blocks.length === 0) {
+        console.warn(`Word-count gen returned zero pages for source ${a.sourcePage} after retry`);
+        onStatus?.(`Warning: source page ${a.sourcePage} skipped — model returned zero pages after retry.`);
+        continue;
+      }
+    }
+
+    // Cap to allocation; pad missing if model under-produces.
+    const capped = blocks.slice(0, a.outCount);
+    for (const b of capped) {
+      outCounter++;
+      pages.push({ pageNumber: outCounter, content: b.content });
+      sourceByOutput.set(outCounter, src.pageNum);
+    }
+    if (capped.length < a.outCount) {
+      console.warn(`Word-count gen under-produced for source ${a.sourcePage}: got ${capped.length}/${a.outCount}`);
+      onStatus?.(`Warning: source ${a.sourcePage} under-produced — got ${capped.length}/${a.outCount} pages.`);
+    }
+  }
+
+  return { pages, sourceByOutput };
+}
+
 // ---------- Batch orchestration ----------
 
 interface TextCallOpts {
@@ -1151,6 +1360,84 @@ async function generateInBatches(
     } catch (e) {
       console.warn('Voice card generation failed, continuing without', e);
     }
+  }
+
+  // Strategy 6: Word-Count Page Allocation.
+  // Runs first among generation-replacing strategies since it owns full pipeline:
+  // LLM trim → host-side allocation → per-page gen → smoothing. Mutually exclusive
+  // with semanticChunking / perPageSmoothing / highlightMap (all override format size).
+  if (flags.wordCountAllocation) {
+    // Phase 0 — front/back matter trim.
+    const range = await detectBodyRange(ocrPages, callApi, onStatus);
+    const skippedFront = ocrPages.filter((p) => p.pageNum < range.startPage).length;
+    const skippedBack = ocrPages.filter((p) => p.pageNum > range.endPage).length;
+    const startLabel = range.startLabel ? ` (${range.startLabel})` : '';
+    const endLabel = range.endLabel ? ` (${range.endLabel})` : '';
+    onStatus?.(`Trim: starting at page ${range.startPage}${startLabel}, ending at page ${range.endPage}${endLabel}. Skipped ${skippedFront} front-matter + ${skippedBack} back-matter pages.`);
+
+    // Phase 1 — word-count allocation (host-side).
+    const allocations = allocateByWordCount(ocrPages, range);
+    const bodyCount = allocations.length;
+    const outputCount = allocations.reduce((s, a) => s + a.outCount, 0);
+    onStatus?.(`Word-count plan: ${outputCount} output pages from ${bodyCount} body source pages (range ${range.startPage}-${range.endPage}).`);
+
+    if (outputCount === 0) {
+      throw new Error('Word-count allocation produced zero output pages — body is too sparse.');
+    }
+
+    // Phase 2 — per-page generation honoring allocation.
+    const { pages: rawPages, sourceByOutput } = await generateByWordCountAllocation(format, ocrPages, allocations, callApi, voiceCard, onStatus);
+    if (rawPages.length === 0) {
+      throw new Error('Word-count generation produced zero pages');
+    }
+
+    // Metadata pass.
+    let title = '', author = '', summary = '';
+    try {
+      onStatus?.('Extracting title / author / summary...');
+      const metaPrompt = `Extract book metadata from the excerpts below.
+
+Use this EXACT text format:
+
+<<<TITLE>>>
+(book title)
+<<<END TITLE>>>
+
+<<<AUTHOR>>>
+(author name)
+<<<END AUTHOR>>>
+
+<<<SUMMARY>>>
+(100-150 word summary of the entire book)
+<<<END SUMMARY>>>
+
+--- BOOK START ---
+${ocrPages.slice(0, 3).map((p) => p.text).join('\n\n').substring(0, 3000)}
+
+--- BOOK END ---
+${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
+      const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
+      title = parsed.title || '';
+      author = parsed.author || '';
+      summary = parsed.summary || '';
+    } catch (e) {
+      console.warn('Metadata extraction failed', e);
+    }
+
+    // Phase 3 — smoothing (reuse existing).
+    onStatus?.('Smoothing pass...');
+    let pages = await smoothPages(format, rawPages, callApi, voiceCard, onStatus);
+
+    // Validator + back-check use source-map slicing per output page.
+    const slices = computePageSlicesFromSourceMap(ocrPages, pages, sourceByOutput);
+    onStatus?.('Validating pages against source...');
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
+
+    if (flags.backCheck) {
+      pages = await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus);
+    }
+
+    return { title, author, summary, pages };
   }
 
   // Strategy 5: Highlight-Driven Importance Map.

@@ -30,6 +30,7 @@ const STRATEGY_STORAGE_KEYS = {
   perPageSmoothing: 'admin.strategy.perPageSmoothing',
   backCheck: 'admin.strategy.backCheck',
   highlightMap: 'admin.strategy.highlightMap',
+  wordCountAllocation: 'admin.strategy.wordCountAllocation',
 } as const;
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
@@ -94,6 +95,7 @@ export default function AdminScreen() {
   const [perPageSmoothing, setPerPageSmoothing] = useState(false);
   const [backCheck, setBackCheck] = useState(false);
   const [highlightMap, setHighlightMap] = useState(false);
+  const [wordCountAllocation, setWordCountAllocation] = useState(false);
   // Error popup
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -103,6 +105,7 @@ export default function AdminScreen() {
     perPageSmoothing,
     backCheck,
     highlightMap,
+    wordCountAllocation,
   };
 
   const wordCountMax = (() => {
@@ -180,6 +183,8 @@ export default function AdminScreen() {
         if (bc != null) setBackCheck(bc === '1');
         const hm = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.highlightMap);
         if (hm != null) setHighlightMap(hm === '1');
+        const wc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.wordCountAllocation);
+        if (wc != null) setWordCountAllocation(wc === '1');
       } catch {}
     })();
   }, []);
@@ -189,6 +194,7 @@ export default function AdminScreen() {
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.perPageSmoothing, perPageSmoothing ? '1' : '0').catch(() => {}); }, [perPageSmoothing]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.backCheck, backCheck ? '1' : '0').catch(() => {}); }, [backCheck]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.highlightMap, highlightMap ? '1' : '0').catch(() => {}); }, [highlightMap]);
+  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.wordCountAllocation, wordCountAllocation ? '1' : '0').catch(() => {}); }, [wordCountAllocation]);
 
   useEffect(() => {
     (async () => { setLoading(true); await fetchBooks(); setLoading(false); })();
@@ -769,9 +775,17 @@ export default function AdminScreen() {
               <View style={s.strategyRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={s.strategyLabel}>Highlight-Driven Map</Text>
-                  <Text style={s.strategyHint}>Per-page highlight → classify story/filler → importance-aware gen. Output page count is variable (story pages may expand). Overrides Per-Page+Smoothing and Semantic Chunking. Note: format selector (mini/pro/ultra) is ignored — output size is driven by per-page importance.</Text>
+                  <Text style={s.strategyHint}>Per-page highlight → classify story/filler → importance-aware gen. Output page count is variable (story pages may expand). Overrides Per-Page+Smoothing and Semantic Chunking. Note: format selector still controls writing-style rules, but output page count is driven by per-page importance (not by mini/pro/ultra).</Text>
                 </View>
                 <Switch value={highlightMap} onValueChange={setHighlightMap} disabled={generating} />
+              </View>
+
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Word-Count Allocation</Text>
+                  <Text style={s.strategyHint}>Auto-trim front/back matter (LLM), then allocate output pages per source page by word count (÷240, &lt;0.4 floor else ceil). Per-page gen + smoothing. Format selector still controls writing-style rules, but output page count is driven by source word count + auto front/back trim (not by mini/pro/ultra). Overrides Semantic Chunking, Per-Page+Smoothing, and Highlight-Driven Map.</Text>
+                </View>
+                <Switch value={wordCountAllocation} onValueChange={setWordCountAllocation} disabled={generating} />
               </View>
             </View>
 
