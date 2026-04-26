@@ -1,9 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { GeneratedPage, StrategyFlags } from './geminiAdmin';
 
-export const SCHEMA_VERSION = 1;
+// Bumped from 1 → 2 after removing semanticChunking / backCheck / highlightMap
+// strategies and their progress fields (highlights, importance, backCheckedPages).
+export const SCHEMA_VERSION = 2;
 
-export type GenPath = 'classic' | 'perPage' | 'wordCount' | 'highlightMap';
+export type GenPath = 'classic' | 'perPage' | 'wordCount';
 export type GenFormat = 'mini' | 'pro' | 'ultra';
 
 export interface OcrPageLite {
@@ -19,8 +21,6 @@ export interface ProgressState {
   path: GenPath;
   voiceCard?: string;
   ocrPages?: OcrPageLite[];
-  highlights?: { pageNum: number; highlight: string }[];
-  importance?: { pageNum: number; category: 'story' | 'semi-filler' | 'filler' }[];
   bodyRange?: { startPage: number; endPage: number; startLabel?: string; endLabel?: string };
   allocations?: { sourcePage: number; outCount: number; words: number }[];
   rawPages?: GeneratedPage[];
@@ -28,7 +28,6 @@ export interface ProgressState {
   sourceByOutput?: [number, number][];
   smoothedPages?: GeneratedPage[];
   validatedPages?: GeneratedPage[];
-  backCheckedPages?: GeneratedPage[];
   meta?: { title: string; author: string; summary: string };
   lastCompletedPhase?: string;
   lastCompletedIndex?: number;
@@ -110,14 +109,11 @@ export async function markIteration(
 }
 
 // Determine which path runs for a given format + flag set. Mirrors generateInBatches gating.
+// All processing strategies are Ultra-only; Mini/Pro always run the classic path.
 export function resolvePath(format: GenFormat, flags: StrategyFlags): GenPath {
-  // Ultra-only flags get stripped for non-ultra.
-  const f: StrategyFlags = format !== 'ultra'
-    ? { ...flags, semanticChunking: false, backCheck: false, highlightMap: false }
-    : flags;
-  if (f.wordCountAllocation) return 'wordCount';
-  if (f.highlightMap) return 'highlightMap';
-  if (f.perPageSmoothing) return 'perPage';
+  if (format !== 'ultra') return 'classic';
+  if (flags.wordCountAllocation) return 'wordCount';
+  if (flags.perPageSmoothing) return 'perPage';
   return 'classic';
 }
 

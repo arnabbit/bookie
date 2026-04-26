@@ -5,6 +5,7 @@ import {
   clearProgress,
   resolvePath,
   flagsCompatible,
+  SCHEMA_VERSION,
   ProgressCtx,
   ProgressState,
 } from './genProgress';
@@ -75,10 +76,7 @@ export interface GenerationResult {
 }
 
 export interface StrategyFlags {
-  semanticChunking?: boolean;
   perPageSmoothing?: boolean;
-  backCheck?: boolean;
-  highlightMap?: boolean;
   wordCountAllocation?: boolean;
 }
 
@@ -89,8 +87,6 @@ type FormatType = 'mini' | 'pro' | 'ultra';
 
 // Tuning — chosen defaults per admin-plans.md open Q's.
 const SMOOTHING_CHUNK_SIZE = 5;
-const BACK_CHECK_DELTA_THRESHOLD = 0.5; // judge score below this triggers regen
-const BACK_CHECK_MAX_REGENS = 1; // regen each flagged page at most once
 const WORD_COUNT_DIVISOR = 240;
 const WORD_COUNT_ROUND_THRESHOLD = 0.3;
 // Front/back matter lives at edges — sample only N pages from each side when source exceeds threshold to avoid context bloat.
@@ -585,110 +581,15 @@ function voiceCardBlock(card: string): string {
   return `\n\nAUTHOR VOICE CARD — match this exactly:\n${card}\n`;
 }
 
-// ---------- Strategy 1: Semantic Chunking ----------
-
-interface SemanticChunk {
+// Type retained for shared use by per-page + classic-batch slice helpers.
+// Allocations themselves are no longer produced (semantic chunking removed).
+interface AllocatedChunk {
   pdfStart: number;
   pdfEnd: number;
-  importance: number; // 0-10
-  label: string;
-}
-
-function buildSemanticAnchorsPrompt(ocrPages: OcrPage[]): string {
-  // Feed a truncated view so we stay within context — first N chars per page.
-  const compact = ocrPages.map((p) => `P${p.pageNum}: ${p.text.substring(0, 400).replace(/\s+/g, ' ')}`).join('\n');
-  return `You are a book structure analyst. Identify semantic chunks — scenes, chapters, or distinct arguments — by their START and END page numbers. Also rate each chunk's narrative importance 0-10 (10 = pivotal turning point, 0 = filler). Chunks must be contiguous and cover all pages 1-${ocrPages.length}. Expect between 5 and 30 chunks.
-
-Use this EXACT text format. Do not add JSON, code fences, or any text outside markers.
-
-<<<CHUNK 1>>>
-start: <int>
-end: <int>
-importance: <int 0-10>
-label: <short label>
-<<<END CHUNK 1>>>
-
-<<<CHUNK 2>>>
-...
-<<<END CHUNK 2>>>
-
---- BOOK (page previews) ---
-${compact}`;
-}
-
-function extractSemanticChunks(raw: string): SemanticChunk[] {
-  const re = /<<<\s*CHUNK\s+\d+\s*>>>([\s\S]*?)<<<\s*END\s+CHUNK\s+\d+\s*>>>/gi;
-  const chunks: SemanticChunk[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw)) !== null) {
-    const body = m[1];
-    const start = parseInt(body.match(/start\s*:\s*(\d+)/i)?.[1] || '0', 10);
-    const end = parseInt(body.match(/end\s*:\s*(\d+)/i)?.[1] || '0', 10);
-    const importance = parseInt(body.match(/importance\s*:\s*(\d+)/i)?.[1] || '5', 10);
-    const label = (body.match(/label\s*:\s*([^\n]+)/i)?.[1] || '').trim();
-    if (start > 0 && end >= start) {
-      chunks.push({ pdfStart: start, pdfEnd: end, importance: Math.max(0, Math.min(10, importance)), label });
-    }
-  }
-  return chunks;
-}
-
-async function detectSemanticChunks(ocrPages: OcrPage[], callApi: TextCallFn, onStatus?: (msg: string) => void): Promise<SemanticChunk[]> {
-  onStatus?.('Detecting semantic chunks...');
-  try {
-    const raw = stripWrapping(await callApi(buildSemanticAnchorsPrompt(ocrPages), { temperature: 0.2 }));
-    const chunks = extractSemanticChunks(raw);
-    if (chunks.length === 0) return [];
-    // Clamp to book bounds.
-    return chunks.map((c) => ({
-      ...c,
-      pdfStart: Math.max(1, Math.min(ocrPages.length, c.pdfStart)),
-      pdfEnd: Math.max(1, Math.min(ocrPages.length, c.pdfEnd)),
-    })).filter((c) => c.pdfEnd >= c.pdfStart);
-  } catch (e) {
-    console.warn('Semantic chunk detection failed, falling back to uniform.', e);
-    return [];
-  }
-}
-
-// Allocate output pages across chunks weighted by importance (flex ±10% vs uniform).
-interface AllocatedChunk extends SemanticChunk {
   outStart: number;
   outEnd: number;
   outCount: number;
-}
-
-function allocateOutputPages(chunks: SemanticChunk[], expectedPages: number): AllocatedChunk[] {
-  if (chunks.length === 0) return [];
-  const totalWeight = chunks.reduce((s, c) => s + Math.max(1, c.importance), 0);
-  // Raw float allocations
-  const raw = chunks.map((c) => (Math.max(1, c.importance) / totalWeight) * expectedPages);
-  // Floor + distribute remainder by largest fractional part
-  const base = raw.map((v) => Math.floor(v));
-  let assigned = base.reduce((s, v) => s + v, 0);
-  const remainders = raw.map((v, i) => ({ i, frac: v - Math.floor(v) })).sort((a, b) => b.frac - a.frac);
-  let ri = 0;
-  while (assigned < expectedPages && ri < remainders.length) {
-    base[remainders[ri].i]++;
-    assigned++;
-    ri++;
-  }
-  // Ensure each chunk gets at least 1 output page
-  for (let i = 0; i < base.length; i++) {
-    if (base[i] < 1) {
-      // steal from largest
-      let maxIdx = 0;
-      for (let j = 0; j < base.length; j++) if (base[j] > base[maxIdx]) maxIdx = j;
-      if (base[maxIdx] > 1) { base[maxIdx]--; base[i]++; }
-    }
-  }
-  let cursor = 1;
-  return chunks.map((c, i) => {
-    const outStart = cursor;
-    const outEnd = Math.min(expectedPages, cursor + base[i] - 1);
-    cursor = outEnd + 1;
-    return { ...c, outStart, outEnd, outCount: outEnd - outStart + 1 };
-  }).filter((a) => a.outCount > 0);
+  label?: string;
 }
 
 // ---------- Strategy 3: Per-Page Generation + Smoothing ----------
@@ -859,334 +760,6 @@ async function smoothPages(
     }
   }
   return result;
-}
-
-// ---------- Strategy 4: Back-Check by Expansion ----------
-
-function buildExpansionPrompt(page: GeneratedPage, sliceText: string): string {
-  const sourceWords = countWords(sliceText);
-  return `You are an expansion engine. Expand the condensed page below back to approximately ${sourceWords} words — filling in the plausible detail the original source would have contained. This is for faithfulness auditing, so your expansion should cover every implication of the condensed page.
-
-Use this EXACT text format. No JSON, no code fences.
-
-<<<EXPANSION>>>
-(expanded ~${sourceWords} word text)
-<<<END EXPANSION>>>
-
---- CONDENSED PAGE ${page.pageNumber} ---
-${page.content}`;
-}
-
-function buildBackCheckJudgePrompt(page: GeneratedPage, expansion: string, sliceText: string): string {
-  return `You are a faithfulness judge. Compare a reconstruction (what an expander produced from a condensed page) against the actual source. Score 0.0 (completely different — major omissions or fabrications) to 1.0 (covers the same events/ideas).
-
-Use this EXACT text format. No JSON, no code fences.
-
-<<<SCORE>>>
-(single number 0.0-1.0)
-<<<END SCORE>>>
-
-<<<REASON>>>
-(one sentence — what was omitted or fabricated, if anything)
-<<<END REASON>>>
-
---- ACTUAL SOURCE ---
-${sliceText}
-
---- RECONSTRUCTION ---
-${expansion}`;
-}
-
-async function backCheckAndRegen(
-  format: FormatType,
-  pages: GeneratedPage[],
-  slices: PageSlice[],
-  callApi: TextCallFn,
-  voiceCard: string,
-  onStatus?: (msg: string) => void,
-  progressCtx?: ProgressCtx,
-  resumeFromIdx: number = 0,
-): Promise<GeneratedPage[]> {
-  const result = [...pages];
-  for (let i = resumeFromIdx; i < result.length; i++) {
-    const page = result[i];
-    const slice = slices.find((s) => s.pageNumber === page.pageNumber);
-    if (!slice) continue;
-    onStatus?.(`Back-check ${i + 1}/${result.length} — expanding page ${page.pageNumber}...`);
-
-    let expansion = '';
-    try {
-      const raw = stripWrapping(await callWithRetry(() => callApi(buildExpansionPrompt(page, slice.sliceText), { temperature: 0.4 }), onStatus));
-      expansion = extractBlock(raw, 'EXPANSION') || '';
-    } catch (e) {
-      console.warn(`Back-check expansion failed page ${page.pageNumber}`, e);
-      continue;
-    }
-    if (!expansion) continue;
-
-    let score = 1.0;
-    let reason = '';
-    try {
-      const raw = stripWrapping(await callWithRetry(() => callApi(buildBackCheckJudgePrompt(page, expansion, slice.sliceText), { temperature: VALIDATOR_TEMP }), onStatus));
-      const scoreStr = extractBlock(raw, 'SCORE') || '';
-      const parsed = parseFloat(scoreStr);
-      if (Number.isFinite(parsed)) score = parsed;
-      reason = extractBlock(raw, 'REASON') || '';
-    } catch (e) {
-      console.warn(`Back-check judge failed page ${page.pageNumber}`, e);
-      continue;
-    }
-
-    if (score < BACK_CHECK_DELTA_THRESHOLD) {
-      onStatus?.(`Regen page ${page.pageNumber} — back-check score ${score.toFixed(2)}: ${reason.substring(0, 60)}`);
-      for (let attempt = 0; attempt < BACK_CHECK_MAX_REGENS; attempt++) {
-        try {
-          const raw = stripWrapping(await callWithRetry(() => callApi(buildRegenPrompt(format, slice, `back-check omission: ${reason}`, voiceCard), { temperature: VALIDATOR_TEMP }), onStatus));
-          const content = extractBlock(raw, 'CONTENT');
-          if (content && content.trim()) {
-            result[i] = { ...result[i], content: content.trim() };
-          }
-        } catch (e) {
-          console.warn(`Back-check regen failed page ${page.pageNumber}`, e);
-        }
-      }
-    }
-    if (progressCtx) {
-      await saveProgress(progressCtx, {
-        backCheckedPages: result,
-        lastCompletedPhase: 'backCheck',
-        lastCompletedIndex: i,
-      });
-    }
-  }
-  return result;
-}
-
-// ---------- Strategy 5: Highlight-Driven Importance Map ----------
-
-type Importance = 'story' | 'semi-filler' | 'filler';
-
-interface PageHighlight {
-  pageNum: number;
-  highlight: string;
-}
-
-function buildHighlightPrompt(page: OcrPage, totalPages: number): string {
-  return `You are reading page ${page.pageNum} of a ${totalPages}-page book. Produce a brief 1-3 sentence highlight: what happens here, or what's the core point. Be concrete — name characters/places/concepts. No generic summary.
-
-Use this EXACT text format. No JSON, no code fences.
-
-<<<HIGHLIGHT>>>
-(1-3 sentence highlight)
-<<<END HIGHLIGHT>>>
-
---- PAGE ${page.pageNum} ---
-${page.text}`;
-}
-
-// Contract: <<<CAT N>>> uses N as the 1-based sequential index into the highlights array
-// passed to the prompt — NOT the OCR pageNum. This avoids silent failure when OCR pageNums
-// skip front matter or are non-contiguous. Parser maps N back to highlights[N-1].pageNum.
-function buildClassifyPrompt(highlights: PageHighlight[]): string {
-  const list = highlights.map((h, i) => `Item ${i + 1}: ${h.highlight}`).join('\n');
-  return `You are categorizing pages of a book by narrative importance. Read all highlights together, then classify each item as one of: story, semi-filler, filler.
-
-- story: pivotal — turning points, key arguments, dramatic scenes, core thesis moments
-- semi-filler: meaningful but not pivotal — supporting examples, character beats, secondary arguments
-- filler: low-stakes — filler description, repetition, transitional padding
-
-Use this EXACT text format. One <<<CAT N>>> block per item, where N matches the Item number above. You MUST emit a block for EVERY item from 1 to ${highlights.length}.
-
-<<<CAT 1>>>
-story
-<<<END CAT 1>>>
-
-<<<CAT 2>>>
-filler
-<<<END CAT 2>>>
-
-...continue for every item up to ${highlights.length}.
-
---- HIGHLIGHTS ---
-${list}`;
-}
-
-function extractCategories(raw: string, highlights: PageHighlight[]): Map<number, Importance> {
-  const re = /<<<\s*CAT\s+(\d+)\s*>>>([\s\S]*?)<<<\s*END\s+CAT\s+\1\s*>>>/gi;
-  const out = new Map<number, Importance>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw)) !== null) {
-    const idx = parseInt(m[1], 10);
-    if (idx < 1 || idx > highlights.length) continue;
-    const pageNum = highlights[idx - 1].pageNum;
-    const body = m[2].trim().toLowerCase();
-    let cat: Importance = 'semi-filler';
-    if (body.startsWith('story')) cat = 'story';
-    else if (body.startsWith('filler')) cat = 'filler';
-    else if (body.startsWith('semi')) cat = 'semi-filler';
-    out.set(pageNum, cat);
-  }
-  return out;
-}
-
-function buildImportanceGenPrompt(
-  format: FormatType,
-  page: OcrPage,
-  category: Importance,
-  highlightMap: PageHighlight[],
-  importanceMap: Map<number, Importance>,
-  voiceCard: string,
-): string {
-  const expansionRule =
-    category === 'filler'
-      ? `This page is FILLER. Compress aggressively. Output 0 or 1 pages. If the content is truly throwaway, emit zero <<<PAGE>>> blocks. Otherwise emit ONE 60-80 word page that captures only the bare minimum.`
-      : category === 'semi-filler'
-      ? `This page is SEMI-FILLER. Condense 1:1 — emit exactly ONE 60-80 word page covering the meaningful content of this source page.`
-      : `This page is STORY. Expand if warranted — emit 1, 2, or 3 60-80 word pages so each pivotal beat gets full breathing room. Each page must cover a distinct moment/idea from this source page; do not pad.`;
-
-  const mapPreview = highlightMap
-    .map((h) => `P${h.pageNum} [${importanceMap.get(h.pageNum) || 'semi-filler'}]: ${h.highlight.substring(0, 120)}`)
-    .join('\n');
-
-  return `You are a literary condensation engine using importance-aware page expansion. You are processing source page ${page.pageNum}.
-
-${expansionRule}
-
-STRICT WORD COUNT: each output page MUST be 60-80 words.
-
-${qualityRules(format)}${voiceCardBlock(voiceCard)}
-
-GLOBAL CONTEXT — full book importance map (for tone/continuity, do not retell other pages):
-${mapPreview}
-
-Use this EXACT text format. Emit zero or more <<<PAGE N>>> blocks where N is a sequential local index (1, 2, ...). No JSON, no code fences, no text outside markers.
-
-<<<PAGE 1>>>
-(60-80 word content)
-<<<END PAGE 1>>>
-
-(emit additional <<<PAGE 2>>>, <<<PAGE 3>>> only if STORY page warrants it)
-
---- SOURCE PAGE ${page.pageNum} ---
-${page.text}`;
-}
-
-async function extractHighlights(
-  ocrPages: OcrPage[],
-  callApi: TextCallFn,
-  onStatus?: (msg: string) => void,
-  progressCtx?: ProgressCtx,
-  resumeFrom?: { startIdx: number; existing: PageHighlight[] },
-): Promise<PageHighlight[]> {
-  const startIdx = resumeFrom?.startIdx ?? 0;
-  const highlights: PageHighlight[] = resumeFrom?.existing ? [...resumeFrom.existing] : [];
-  for (let i = startIdx; i < ocrPages.length; i++) {
-    const p = ocrPages[i];
-    onStatus?.(`Extracting highlights ${i + 1}/${ocrPages.length} (page ${p.pageNum})...`);
-    const raw = stripWrapping(await callWithRetry(() => callApi(buildHighlightPrompt(p, ocrPages.length), { temperature: 0.3 }), onStatus));
-    const h = extractBlock(raw, 'HIGHLIGHT') || '';
-    highlights.push({ pageNum: p.pageNum, highlight: h.trim() || '(no highlight)' });
-    if (progressCtx) {
-      await saveProgress(progressCtx, {
-        highlights,
-        lastCompletedPhase: 'highlight',
-        lastCompletedIndex: i,
-      });
-    }
-  }
-  return highlights;
-}
-
-async function classifyImportance(
-  highlights: PageHighlight[],
-  callApi: TextCallFn,
-  onStatus?: (msg: string) => void,
-): Promise<Map<number, Importance>> {
-  onStatus?.('Classifying importance...');
-  const raw1 = stripWrapping(await callWithRetry(() => callApi(buildClassifyPrompt(highlights), { temperature: 0.2 }), onStatus));
-  let map = extractCategories(raw1, highlights);
-
-  // Coverage check: if <80% of items classified, retry once with stricter prompt.
-  const threshold = Math.floor(highlights.length * 0.8);
-  if (map.size < threshold) {
-    onStatus?.(`Classify coverage low (${map.size}/${highlights.length}); retrying...`);
-    const stricter = buildClassifyPrompt(highlights) + `\n\nIMPORTANT: your previous response was incomplete. You MUST emit exactly ${highlights.length} <<<CAT N>>> blocks, one for every item from 1 to ${highlights.length}. Do not skip any.`;
-    const raw2 = stripWrapping(await callWithRetry(() => callApi(stricter, { temperature: 0.2 }), onStatus));
-    const map2 = extractCategories(raw2, highlights);
-    if (map2.size > map.size) map = map2;
-  }
-
-  if (map.size < threshold) {
-    onStatus?.(`Warning: classify still incomplete (${map.size}/${highlights.length}); missing pages default to semi-filler.`);
-  }
-
-  // Fill missing pages with semi-filler default.
-  for (const h of highlights) {
-    if (!map.has(h.pageNum)) map.set(h.pageNum, 'semi-filler');
-  }
-  return map;
-}
-
-async function generateByImportance(
-  format: FormatType,
-  ocrPages: OcrPage[],
-  highlights: PageHighlight[],
-  importance: Map<number, Importance>,
-  callApi: TextCallFn,
-  voiceCard: string,
-  onStatus?: (msg: string) => void,
-  progressCtx?: ProgressCtx,
-  resumeFrom?: { startIdx: number; pages: GeneratedPage[]; sourceByOutput: Map<number, number> },
-): Promise<{ pages: GeneratedPage[]; sourceByOutput: Map<number, number> }> {
-  const pages: GeneratedPage[] = resumeFrom?.pages ? [...resumeFrom.pages] : [];
-  const sourceByOutput = resumeFrom?.sourceByOutput ? new Map(resumeFrom.sourceByOutput) : new Map<number, number>();
-  let outCounter = pages.length;
-  const startIdx = resumeFrom?.startIdx ?? 0;
-
-  for (let i = startIdx; i < ocrPages.length; i++) {
-    const src = ocrPages[i];
-    const cat = importance.get(src.pageNum) || 'semi-filler';
-    onStatus?.(`Generating page ${i + 1}/${ocrPages.length} [${cat}] (source ${src.pageNum})...`);
-
-    const prompt = buildImportanceGenPrompt(format, src, cat, highlights, importance, voiceCard);
-    const raw = stripWrapping(await callWithRetry(() => callApi(prompt, { temperature: 0.6 }), onStatus));
-    let blocks = extractPageBlocks(raw);
-
-    if (blocks.length === 0 && cat !== 'filler') {
-      // Non-filler returning nothing — retry once with stricter prompt.
-      onStatus?.(`Empty non-filler page ${src.pageNum}; retrying with stricter prompt...`);
-      const stricter = prompt + `\n\nIMPORTANT: your previous response emitted zero pages. This source page is ${cat.toUpperCase()} and you MUST emit at least ONE <<<PAGE 1>>> block. Do not return empty.`;
-      const raw2 = stripWrapping(await callWithRetry(() => callApi(stricter, { temperature: 0.6 }), onStatus));
-      blocks = extractPageBlocks(raw2);
-      if (blocks.length === 0) {
-        onStatus?.(`Warning: ${cat} source page ${src.pageNum} produced no output after retry; story beat lost.`);
-        console.warn(`Importance gen returned zero pages for non-filler source ${src.pageNum} after retry`);
-      }
-    }
-
-    // Hard caps per category so a misbehaving model can't blow up output.
-    const maxByCategory = cat === 'filler' ? 1 : cat === 'semi-filler' ? 1 : 3;
-    if (blocks.length > maxByCategory) {
-      onStatus?.(`Warning: ${cat} source page ${src.pageNum} emitted ${blocks.length} pages; capping at ${maxByCategory}.`);
-    }
-    const capped = blocks.slice(0, maxByCategory);
-
-    for (const b of capped) {
-      outCounter++;
-      pages.push({ pageNumber: outCounter, content: b.content });
-      sourceByOutput.set(outCounter, src.pageNum);
-    }
-    if (progressCtx) {
-      await saveProgress(progressCtx, {
-        rawPages: pages,
-        sourceByOutput: Array.from(sourceByOutput.entries()),
-        lastCompletedPhase: 'impGen',
-        lastCompletedIndex: i,
-      });
-    }
-  }
-
-  return { pages, sourceByOutput };
 }
 
 function computePageSlicesFromSourceMap(
@@ -1460,10 +1033,10 @@ async function _generateInBatchesInner(
   const totalPdfPages = ocrPages.length;
   const expectedPages = computeExpectedPages(format, totalPdfPages);
 
-  // Ultra-only strategies: gate at the top so all downstream branches see corrected flags.
-  // Stored toggle state is preserved in AsyncStorage on the UI side; we just runtime-strip here.
+  // All processing strategies are Ultra-only. Strip flags entirely for Mini/Pro so they
+  // run the classic single-shot/batch path regardless of stored toggle state.
   if (format !== 'ultra') {
-    flags = { ...flags, semanticChunking: false, backCheck: false, highlightMap: false };
+    flags = {};
   }
 
   // Resume hydration: load existing progress + check path/flag compat.
@@ -1478,7 +1051,7 @@ async function _generateInBatchesInner(
     const path = resolvePath(format, flags);
     // Initialize/refresh progress meta.
     await saveProgress(progressCtx, {
-      schemaVersion: 1,
+      schemaVersion: SCHEMA_VERSION,
       startedAt: prior?.startedAt || Date.now(),
       format: format as any,
       flags,
@@ -1500,10 +1073,9 @@ async function _generateInBatchesInner(
     onStatus?.(`Resuming with cached voice card (${voiceCard.length} chars).`);
   }
 
-  // Strategy 6: Word-Count Page Allocation.
-  // Runs first among generation-replacing strategies since it owns full pipeline:
-  // LLM trim → host-side allocation → per-page gen → smoothing. Mutually exclusive
-  // with semanticChunking / perPageSmoothing / highlightMap (all override format size).
+  // Strategy: Word-Count Page Allocation.
+  // Owns full pipeline: LLM trim → host-side allocation → per-page gen → smoothing.
+  // Mutually exclusive with perPageSmoothing (overrides format-size expectation).
   if (flags.wordCountAllocation) {
     // Phase 0 — front/back matter trim.
     let range = prior?.bodyRange;
@@ -1593,139 +1165,17 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       ? await smoothPages(format, smoothResume.pages, callApi, voiceCard, onStatus, progressCtx, smoothResume.fromIdx)
       : await smoothPages(format, rawPages, callApi, voiceCard, onStatus, progressCtx);
 
-    // Validator + back-check use source-map slicing per output page.
+    // Validator uses source-map slicing per output page.
     const slices = computePageSlicesFromSourceMap(ocrPages, pages, sourceByOutput);
     onStatus?.('Validating pages against source...');
     pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
 
-    if (flags.backCheck) {
-      const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
-        ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
-        : null;
-      pages = bcResume
-        ? await backCheckAndRegen(format, bcResume.pages, slices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
-        : await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus, progressCtx);
-    }
-
     if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return { title, author, summary, pages };
   }
 
-  // Strategy 5: Highlight-Driven Importance Map.
-  // Owns the entire generation path — replaces classic batch + per-page+smoothing.
-  // Semantic chunking is skipped (this strategy assigns its own importance per source page).
-  if (flags.highlightMap) {
-    // Resume highlights mid-loop if applicable.
-    const hlResume = prior?.lastCompletedPhase === 'highlight' && prior.highlights
-      ? { startIdx: (prior.lastCompletedIndex ?? -1) + 1, existing: prior.highlights }
-      : prior?.highlights && (prior.lastCompletedPhase === 'classify' || prior.importance)
-        ? { startIdx: prior.highlights.length, existing: prior.highlights }
-        : undefined;
-    const highlights = await extractHighlights(ocrPages, callApi, onStatus, progressCtx, hlResume);
-
-    let importance: Map<number, Importance>;
-    if (prior?.importance && prior.importance.length > 0) {
-      importance = new Map(prior.importance.map((x) => [x.pageNum, x.category]));
-    } else {
-      importance = await classifyImportance(highlights, callApi, onStatus);
-      if (progressCtx) {
-        await saveProgress(progressCtx, {
-          importance: [...importance.entries()].map(([pageNum, category]) => ({ pageNum, category })),
-          lastCompletedPhase: 'classify',
-        });
-      }
-    }
-    const storyCount = [...importance.values()].filter((c) => c === 'story').length;
-    const semiCount = [...importance.values()].filter((c) => c === 'semi-filler').length;
-    const fillerCount = [...importance.values()].filter((c) => c === 'filler').length;
-    onStatus?.(`Importance map ready: ${storyCount} story / ${semiCount} semi / ${fillerCount} filler.`);
-
-    // Short-circuit: if every page is filler, generation will produce ~0 pages and throw later.
-    // Bail early instead of burning N gen calls.
-    if (storyCount === 0 && semiCount === 0) {
-      throw new Error('Highlight-driven importance map classified every page as filler; nothing to generate.');
-    }
-
-    const impResume = prior?.lastCompletedPhase === 'impGen' && prior.rawPages
-      ? {
-          startIdx: (prior.lastCompletedIndex ?? -1) + 1,
-          pages: prior.rawPages,
-          sourceByOutput: new Map(prior.sourceByOutput || []),
-        }
-      : undefined;
-    const { pages: rawPages, sourceByOutput } = await generateByImportance(
-      format, ocrPages, highlights, importance, callApi, voiceCard, onStatus, progressCtx, impResume,
-    );
-    if (rawPages.length === 0) {
-      throw new Error('Highlight-driven generation produced zero pages');
-    }
-
-    // Metadata pass.
-    let title = prior?.meta?.title || '';
-    let author = prior?.meta?.author || '';
-    let summary = prior?.meta?.summary || '';
-    if (!prior?.meta) {
-      try {
-        onStatus?.('Extracting title / author / summary...');
-        const metaPrompt = `Extract book metadata from the excerpts below.
-
-Use this EXACT text format:
-
-<<<TITLE>>>
-(book title)
-<<<END TITLE>>>
-
-<<<AUTHOR>>>
-(author name)
-<<<END AUTHOR>>>
-
-<<<SUMMARY>>>
-(100-150 word summary of the entire book)
-<<<END SUMMARY>>>
-
---- BOOK START ---
-${ocrPages.slice(0, 3).map((p) => p.text).join('\n\n').substring(0, 3000)}
-
---- BOOK END ---
-${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
-        const parsed = await callWithRetry(() => callAndParse(callApi, metaPrompt, { temperature: 0.3 }), onStatus);
-        title = parsed.title || '';
-        author = parsed.author || '';
-        summary = parsed.summary || '';
-        if (progressCtx) await saveProgress(progressCtx, { meta: { title, author, summary }, lastCompletedPhase: 'meta' });
-      } catch (e) {
-        console.warn('Metadata extraction failed', e);
-      }
-    }
-
-    const slices = computePageSlicesFromSourceMap(ocrPages, rawPages, sourceByOutput);
-    onStatus?.('Validating pages against source...');
-    let pages = await validateAndRepair(callApi, format, rawPages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
-
-    if (flags.backCheck) {
-      const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
-        ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
-        : null;
-      pages = bcResume
-        ? await backCheckAndRegen(format, bcResume.pages, slices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
-        : await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus, progressCtx);
-    }
-
-    if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
-    return { title, author, summary, pages };
-  }
-
-  // Strategy 1: Semantic Chunking — detect narrative boundaries + allocate output pages.
-  // Skip when single-shot batch path will be taken (allocations unused there).
-  let allocations: AllocatedChunk[] | null = null;
-  const willSingleShot = !flags.perPageSmoothing && expectedPages <= BATCH_SIZE;
-  if (flags.semanticChunking && !willSingleShot) {
-    const chunks = await detectSemanticChunks(ocrPages, callApi, onStatus);
-    if (chunks.length > 0) {
-      allocations = allocateOutputPages(chunks, expectedPages);
-      onStatus?.(`Semantic chunking: ${allocations.length} chunks allocated.`);
-    }
-  }
+  // Semantic chunking removed — allocations always null for the classic/per-page paths.
+  const allocations: AllocatedChunk[] | null = null;
 
   // Strategy 3: Per-Page Generation + Chunked Smoothing path.
   if (flags.perPageSmoothing) {
@@ -1786,16 +1236,6 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     onStatus?.('Validating pages against source...');
     pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
 
-    // Strategy 4: Back-Check by Expansion.
-    if (flags.backCheck) {
-      const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
-        ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
-        : null;
-      pages = bcResume
-        ? await backCheckAndRegen(format, bcResume.pages, slices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
-        : await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus, progressCtx);
-    }
-
     if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return { title, author, summary, pages };
   }
@@ -1826,15 +1266,6 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     const slices = computePageSlices(ocrPages, pages, 1, totalPdfPages);
     pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
 
-    if (flags.backCheck) {
-      const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
-        ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
-        : null;
-      pages = bcResume
-        ? await backCheckAndRegen(format, bcResume.pages, slices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
-        : await backCheckAndRegen(format, pages, slices, callApi, voiceCard, onStatus, progressCtx);
-    }
-
     if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return {
       title: parsed.title || '',
@@ -1844,32 +1275,10 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     };
   }
 
-  // Batch mode — split OCR text into chunks.
-  // If semantic chunking is on, derive batch boundaries from allocations (grouping chunks to roughly BATCH_SIZE output pages each).
+  // Batch mode — split OCR text into uniform chunks.
   const batches: { startPage: number; endPage: number; count: number; pdfStart: number; pdfEnd: number; text: string }[] = [];
 
-  if (allocations && allocations.length > 0) {
-    let acc: AllocatedChunk[] = [];
-    let accCount = 0;
-    const flush = () => {
-      if (acc.length === 0) return;
-      const startPage = acc[0].outStart;
-      const endPage = acc[acc.length - 1].outEnd;
-      const pdfStart = acc[0].pdfStart;
-      const pdfEnd = acc[acc.length - 1].pdfEnd;
-      const chunkPages = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
-      const text = chunkPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
-      batches.push({ startPage, endPage, count: endPage - startPage + 1, pdfStart, pdfEnd, text });
-      acc = []; accCount = 0;
-    };
-    for (const a of allocations) {
-      acc.push(a);
-      accCount += a.outCount;
-      if (accCount >= BATCH_SIZE) flush();
-    }
-    flush();
-  } else {
-    for (let i = 0; i < expectedPages; i += BATCH_SIZE) {
+  for (let i = 0; i < expectedPages; i += BATCH_SIZE) {
       const startPage = i + 1;
       const endPage = Math.min(i + BATCH_SIZE, expectedPages);
       const count = endPage - startPage + 1;
@@ -1879,7 +1288,6 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       const chunkPages = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
       const text = chunkPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
       batches.push({ startPage, endPage, count, pdfStart, pdfEnd, text });
-    }
   }
 
   let title = prior?.meta?.title || '';
@@ -1890,16 +1298,6 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     ? (prior.lastCompletedIndex ?? -1) + 1
     : 0;
   const allPages: GeneratedPage[] = startBatchIdx > 0 && prior?.rawPages ? [...prior.rawPages] : [];
-  const allSlices: PageSlice[] = [];
-
-  // Recompute slices for already-completed batches so back-check has them.
-  if (startBatchIdx > 0) {
-    for (let b = 0; b < startBatchIdx && b < batches.length; b++) {
-      const { pdfStart, pdfEnd, startPage, endPage } = batches[b];
-      const completedPages = allPages.filter((p) => p.pageNumber >= startPage && p.pageNumber <= endPage);
-      allSlices.push(...computePageSlices(ocrPages, completedPages, pdfStart, pdfEnd));
-    }
-  }
 
   for (let b = startBatchIdx; b < batches.length; b++) {
     const { startPage, endPage, count, pdfStart, pdfEnd, text } = batches[b];
@@ -1940,7 +1338,6 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
 
     allPages.push(...pages);
-    allSlices.push(...slices);
 
     if (progressCtx) {
       await saveProgress(progressCtx, {
@@ -1955,17 +1352,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     throw new Error('Generation produced no pages across all batches');
   }
 
-  let finalPages = allPages.slice(0, expectedPages);
-
-  // Strategy 4: Back-Check by Expansion (classic path, batch-mode).
-  if (flags.backCheck) {
-    const bcResume = prior?.lastCompletedPhase === 'backCheck' && prior.backCheckedPages
-      ? { pages: prior.backCheckedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
-      : null;
-    finalPages = bcResume
-      ? await backCheckAndRegen(format, bcResume.pages, allSlices, callApi, voiceCard, onStatus, progressCtx, bcResume.fromIdx)
-      : await backCheckAndRegen(format, finalPages, allSlices, callApi, voiceCard, onStatus, progressCtx);
-  }
+  const finalPages = allPages.slice(0, expectedPages);
 
   if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
   return { title, author, summary, pages: finalPages };

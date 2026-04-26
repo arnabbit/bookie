@@ -26,10 +26,7 @@ import { clearProgress, loadProgress } from '@/lib/genProgress';
 
 const WORD_CAP_STORAGE_KEY = 'admin.wordCountMax';
 const STRATEGY_STORAGE_KEYS = {
-  semanticChunking: 'admin.strategy.semanticChunking',
   perPageSmoothing: 'admin.strategy.perPageSmoothing',
-  backCheck: 'admin.strategy.backCheck',
-  highlightMap: 'admin.strategy.highlightMap',
   wordCountAllocation: 'admin.strategy.wordCountAllocation',
 } as const;
 
@@ -89,11 +86,8 @@ export default function AdminScreen() {
   const [showCustomModel, setShowCustomModel] = useState(false);
   // Validator word-count cap (persisted)
   const [wordCountMaxText, setWordCountMaxText] = useState(String(DEFAULT_WORD_COUNT_MAX));
-  // Strategy toggles (persisted)
-  const [semanticChunking, setSemanticChunking] = useState(false);
+  // Strategy toggles (persisted) — only applied when activeFormat === 'ultra'.
   const [perPageSmoothing, setPerPageSmoothing] = useState(false);
-  const [backCheck, setBackCheck] = useState(false);
-  const [highlightMap, setHighlightMap] = useState(false);
   const [wordCountAllocation, setWordCountAllocation] = useState(false);
   // Error popup
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -103,13 +97,11 @@ export default function AdminScreen() {
   type GenAttempt = { kind: GenKind; args: any } | null;
   const lastGenAttemptRef = useRef<GenAttempt>(null);
 
-  const strategyFlags: StrategyFlags = {
-    semanticChunking,
-    perPageSmoothing,
-    backCheck,
-    highlightMap,
-    wordCountAllocation,
-  };
+  // Strategies only apply for Ultra. Strip everything for Mini/Pro so the runtime
+  // sees the classic path regardless of toggle state in storage.
+  const strategyFlags: StrategyFlags = activeFormat === 'ultra'
+    ? { perPageSmoothing, wordCountAllocation }
+    : {};
 
   const wordCountMax = (() => {
     const n = parseInt(wordCountMaxText, 10);
@@ -176,24 +168,15 @@ export default function AdminScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const sc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.semanticChunking);
-        if (sc != null) setSemanticChunking(sc === '1');
         const pp = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.perPageSmoothing);
         if (pp != null) setPerPageSmoothing(pp === '1');
-        const bc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.backCheck);
-        if (bc != null) setBackCheck(bc === '1');
-        const hm = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.highlightMap);
-        if (hm != null) setHighlightMap(hm === '1');
         const wc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.wordCountAllocation);
         if (wc != null) setWordCountAllocation(wc === '1');
       } catch {}
     })();
   }, []);
 
-  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.semanticChunking, semanticChunking ? '1' : '0').catch(() => {}); }, [semanticChunking]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.perPageSmoothing, perPageSmoothing ? '1' : '0').catch(() => {}); }, [perPageSmoothing]);
-  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.backCheck, backCheck ? '1' : '0').catch(() => {}); }, [backCheck]);
-  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.highlightMap, highlightMap ? '1' : '0').catch(() => {}); }, [highlightMap]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.wordCountAllocation, wordCountAllocation ? '1' : '0').catch(() => {}); }, [wordCountAllocation]);
 
   useEffect(() => {
@@ -742,54 +725,29 @@ export default function AdminScreen() {
               />
             </View>
 
-            {/* Strategy Toggles */}
-            <View style={s.strategyBox}>
-              <Text style={s.sectionLabel}>Processing Strategies</Text>
-              <Text style={s.strategyNote}>Voice card (style extraction) runs automatically before generation in every method.</Text>
+            {/* Strategy Toggles — only visible/applicable for Ultra. */}
+            {activeFormat === 'ultra' && (
+              <View style={s.strategyBox}>
+                <Text style={s.sectionLabel}>Processing Strategies</Text>
+                <Text style={s.strategyNote}>Voice card (style extraction) runs automatically before generation in every method. Strategies below only run for Ultra.</Text>
 
-              <View style={s.strategyRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.strategyLabel}>Per-Page + Smoothing</Text>
-                  <Text style={s.strategyHint}>One LLM call per output page, then chunked smoothing pass</Text>
+                <View style={s.strategyRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.strategyLabel}>Per-Page + Smoothing</Text>
+                    <Text style={s.strategyHint}>One LLM call per output page, then chunked smoothing pass</Text>
+                  </View>
+                  <Switch value={perPageSmoothing} onValueChange={setPerPageSmoothing} disabled={generating} />
                 </View>
-                <Switch value={perPageSmoothing} onValueChange={setPerPageSmoothing} disabled={generating} />
-              </View>
 
-              <View style={s.strategyRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.strategyLabel}>Word-Count Allocation</Text>
-                  <Text style={s.strategyHint}>Auto-trim front/back matter (LLM), then allocate output pages per source page by word count (÷240, &lt;0.4 floor else ceil). Per-page gen + smoothing. Format selector still controls writing-style rules, but output page count is driven by source word count + auto front/back trim (not by mini/pro/ultra). Overrides Per-Page+Smoothing.</Text>
+                <View style={s.strategyRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.strategyLabel}>Word-Count Allocation</Text>
+                    <Text style={s.strategyHint}>Auto-trim front/back matter (LLM), then allocate output pages per source page by word count (÷240, &lt;0.4 floor else ceil). Per-page gen + smoothing. Output page count is driven by source word count + auto front/back trim. Overrides Per-Page+Smoothing.</Text>
+                  </View>
+                  <Switch value={wordCountAllocation} onValueChange={setWordCountAllocation} disabled={generating} />
                 </View>
-                <Switch value={wordCountAllocation} onValueChange={setWordCountAllocation} disabled={generating} />
               </View>
-
-              <Text style={s.strategySubhead}>Ultra-only strategies</Text>
-              <Text style={s.strategyNote}>These strategies only run when generating Ultra format. Toggle state is preserved across formats but ignored at runtime for Mini/Pro.</Text>
-
-              <View style={s.strategyRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.strategyLabel}>Semantic Chunking</Text>
-                  <Text style={s.strategyHint}>Split on scene/chapter boundaries; allocate pages by importance. Affects classic batch grouping only — composes with other toggles.</Text>
-                </View>
-                <Switch value={semanticChunking} onValueChange={setSemanticChunking} disabled={generating} />
-              </View>
-
-              <View style={s.strategyRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.strategyLabel}>Back-Check by Expansion</Text>
-                  <Text style={s.strategyHint}>Expand drafted pages, judge vs source, regen on large delta. Runs after generation — composes with other toggles.</Text>
-                </View>
-                <Switch value={backCheck} onValueChange={setBackCheck} disabled={generating} />
-              </View>
-
-              <View style={s.strategyRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.strategyLabel}>Highlight-Driven Map</Text>
-                  <Text style={s.strategyHint}>Per-page highlight → classify story/filler → importance-aware gen. Output page count is variable (story pages may expand). Overrides Per-Page+Smoothing and Semantic Chunking. Mutually exclusive w/ Word-Count Allocation (Word-Count wins). Format selector still controls writing-style rules, but output page count is driven by per-page importance.</Text>
-                </View>
-                <Switch value={highlightMap} onValueChange={setHighlightMap} disabled={generating} />
-              </View>
-            </View>
+            )}
 
             {generating && (
               <View style={s.genStatus}>
