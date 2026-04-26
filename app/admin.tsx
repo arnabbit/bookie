@@ -28,6 +28,7 @@ const WORD_CAP_STORAGE_KEY = 'admin.wordCountMax';
 const STRATEGY_STORAGE_KEYS = {
   perPageSmoothing: 'admin.strategy.perPageSmoothing',
   wordCountAllocation: 'admin.strategy.wordCountAllocation',
+  chapterDetection: 'admin.strategy.chapterDetection',
 } as const;
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
@@ -89,6 +90,8 @@ export default function AdminScreen() {
   // Strategy toggles (persisted) — only applied when activeFormat === 'ultra'.
   const [perPageSmoothing, setPerPageSmoothing] = useState(false);
   const [wordCountAllocation, setWordCountAllocation] = useState(false);
+  // Chapter detection applies to all formats. Default ON.
+  const [chapterDetection, setChapterDetection] = useState(true);
   // Error popup
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Generation error modal (separate flow — supports retry/discard).
@@ -100,8 +103,8 @@ export default function AdminScreen() {
   // Strategies only apply for Ultra. Strip everything for Mini/Pro so the runtime
   // sees the classic path regardless of toggle state in storage.
   const strategyFlags: StrategyFlags = activeFormat === 'ultra'
-    ? { perPageSmoothing, wordCountAllocation }
-    : {};
+    ? { perPageSmoothing, wordCountAllocation, chapterDetection }
+    : { chapterDetection };
 
   const wordCountMax = (() => {
     const n = parseInt(wordCountMaxText, 10);
@@ -172,12 +175,15 @@ export default function AdminScreen() {
         if (pp != null) setPerPageSmoothing(pp === '1');
         const wc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.wordCountAllocation);
         if (wc != null) setWordCountAllocation(wc === '1');
+        const cd = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.chapterDetection);
+        if (cd != null) setChapterDetection(cd === '1');
       } catch {}
     })();
   }, []);
 
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.perPageSmoothing, perPageSmoothing ? '1' : '0').catch(() => {}); }, [perPageSmoothing]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.wordCountAllocation, wordCountAllocation ? '1' : '0').catch(() => {}); }, [wordCountAllocation]);
+  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.chapterDetection, chapterDetection ? '1' : '0').catch(() => {}); }, [chapterDetection]);
 
   useEffect(() => {
     (async () => { setLoading(true); await fetchBooks(); setLoading(false); })();
@@ -723,6 +729,17 @@ export default function AdminScreen() {
                 onChangeText={(t) => setWordCountMaxText(t.replace(/[^0-9]/g, ''))}
                 keyboardType="number-pad"
               />
+            </View>
+
+            {/* Chapter Detection — applies to all formats and all paths. */}
+            <View style={s.strategyBox}>
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Chapter Detection</Text>
+                  <Text style={s.strategyHint}>Detect chapter boundaries (LLM) and batch/smooth per chapter. Default ON. When OFF: classic uses fixed-20 batches; per-page/word-count use fixed 5-page smoothing chunks.</Text>
+                </View>
+                <Switch value={chapterDetection} onValueChange={setChapterDetection} disabled={generating} />
+              </View>
             </View>
 
             {/* Strategy Toggles — only visible/applicable for Ultra. */}

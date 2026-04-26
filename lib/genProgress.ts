@@ -23,6 +23,9 @@ export interface ProgressState {
   ocrPages?: OcrPageLite[];
   bodyRange?: { startPage: number; endPage: number; startLabel?: string; endLabel?: string };
   allocations?: { sourcePage: number; outCount: number; words: number }[];
+  // Classic-batch chapter mapping (per-chapter batching). Each entry maps a chapter
+  // to its PDF page range, output page range, and optional label.
+  chapters?: { startPage: number; endPage: number; outStart: number; outEnd: number; label?: string }[];
   rawPages?: GeneratedPage[];
   // sourceByOutput entries (Map serialized as array of [outPage, srcPage]).
   sourceByOutput?: [number, number][];
@@ -118,10 +121,16 @@ export function resolvePath(format: GenFormat, flags: StrategyFlags): GenPath {
 }
 
 // Compare two flag objects after path resolution — they're "compatible" if they yield the same path.
+// Also requires chapterDetection to match: it changes batching/smoothing structure across all paths,
+// so cached chapters/smoothing chunks would be wrong if the toggle flipped between runs.
 export function flagsCompatible(
   a: StrategyFlags,
   b: StrategyFlags,
   format: GenFormat,
 ): boolean {
-  return resolvePath(format, a) === resolvePath(format, b);
+  if (resolvePath(format, a) !== resolvePath(format, b)) return false;
+  // Default true; treat undefined as true.
+  const aChap = a.chapterDetection !== false;
+  const bChap = b.chapterDetection !== false;
+  return aChap === bChap;
 }

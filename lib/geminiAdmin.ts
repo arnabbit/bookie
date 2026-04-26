@@ -78,6 +78,10 @@ export interface GenerationResult {
 export interface StrategyFlags {
   perPageSmoothing?: boolean;
   wordCountAllocation?: boolean;
+  // Chapter-based batching/smoothing. Default ON. Applies to all 3 paths.
+  // Classic path: one batch per chapter (vs fixed-20). Per-page/word-count: smoothing
+  // runs per chapter slice instead of fixed 5-page chunks.
+  chapterDetection?: boolean;
 }
 
 // Voice card extraction is skipped for very small inputs — cost/benefit isn't worth it.
@@ -208,8 +212,12 @@ function buildBatchPrompt(
   totalPdfPages: number,
   batchText: string,
   voiceCard: string = '',
+  chapterLabel?: string,
 ): string {
   const isFirst = batchIndex === 0;
+  const chapterLine = chapterLabel
+    ? `\nThis batch corresponds to: ${chapterLabel}. Treat the excerpt as a self-contained chapter.\n`
+    : '';
 
   const metaInstructions = isFirst
     ? `Instructions:
@@ -236,7 +244,7 @@ Produce EXACTLY ${pagesInBatch} output pages numbered ${startPage} through ${end
     : '';
 
   return `You are a literary condensation engine. You are creating a ${totalOutputPages}-page condensed version of a ${totalPdfPages}-page book.
-
+${chapterLine}
 This text excerpt contains pages ${pdfStart}-${pdfEnd} of the original book (batch ${batchIndex + 1} of ${totalBatches}). Generate EXACTLY ${pagesInBatch} output pages that cover ALL content in this excerpt. Every page must be represented — read it completely from start to finish.
 
 STRICT WORD COUNT: Each page MUST be exactly 60-80 words. Not 40, not 100. Count carefully.
@@ -762,6 +770,103 @@ async function smoothPages(
   return result;
 }
 
+// Per-chapter smoothing — one smoothing call per chapter's output-page slice.
+// Reuses buildSmoothingPrompt (same neighbor convention). Each chapter is one "chunk".
+// resumeChunkIdx skips already-completed chapters.
+async function smoothPagesByChapters(
+  format: FormatType,
+  pages: GeneratedPage[],
+  chapterRanges: { outStart: number; outEnd: number; label?: string }[],
+  callApi: TextCallFn,
+  voiceCard: string,
+  onStatus?: (msg: string) => void,
+  progressCtx?: ProgressCtx,
+  resumeChunkIdx: number = 0,
+): Promise<GeneratedPage[]> {
+  if (pages.length === 0 || chapterRanges.length === 0) return pages;
+  const result = pages.map((p) => ({ ...p }));
+  // Build position index by pageNumber for O(1) lookup.
+  const posByPage = new Map<number, number>();
+  result.forEach((p, i) => posByPage.set(p.pageNumber, i));
+
+  const totalChunks = chapterRanges.length;
+  for (let ci = resumeChunkIdx; ci < totalChunks; ci++) {
+    const range = chapterRanges[ci];
+    // Collect indices of result pages whose pageNumber falls in [outStart, outEnd].
+    const idxs: number[] = [];
+    for (let pn = range.outStart; pn <= range.outEnd; pn++) {
+      const idx = posByPage.get(pn);
+      if (idx !== undefined) idxs.push(idx);
+    }
+    if (idxs.length === 0) continue;
+
+    const startIdx = idxs[0];
+    const endIdxExclusive = idxs[idxs.length - 1] + 1;
+    const chunkPages = idxs.map((i) => result[i]);
+    const prev = startIdx > 0 ? result[startIdx - 1] : null;
+    const next = endIdxExclusive < result.length ? result[endIdxExclusive] : null;
+
+    const labelPart = range.label ? ` "${range.label}"` : '';
+    onStatus?.(`Smoothing chapter ${ci + 1}/${totalChunks}${labelPart} (pages ${chunkPages[0].pageNumber}-${chunkPages[chunkPages.length - 1].pageNumber})...`);
+
+    const prompt = buildSmoothingPrompt(format, chunkPages, prev, next, voiceCard);
+    const raw = stripWrapping(await callWithRetry(() => callApi(prompt, { temperature: 0.5 }), onStatus));
+
+    const re = /<<<\s*SMOOTHED\s+(\d+)\s*>>>([\s\S]*?)<<<\s*END\s+SMOOTHED\s+\1\s*>>>/gi;
+    let m: RegExpExecArray | null;
+    const byPage = new Map<number, string>();
+    while ((m = re.exec(raw)) !== null) {
+      byPage.set(parseInt(m[1], 10), m[2].trim());
+    }
+    for (let i = 0; i < chunkPages.length; i++) {
+      const p = chunkPages[i];
+      const smoothed = byPage.get(p.pageNumber);
+      if (smoothed) {
+        result[idxs[i]] = { ...result[idxs[i]], content: smoothed };
+      } else {
+        console.warn(`Chapter smoothing skipped page ${p.pageNumber} — no block found`);
+      }
+    }
+    if (progressCtx) {
+      await saveProgress(progressCtx, {
+        smoothedPages: result,
+        lastCompletedPhase: 'smooth',
+        lastCompletedIndex: ci,
+      });
+    }
+  }
+  return result;
+}
+
+// For wordCount path: chapters → output ranges using actual per-source-page allocations.
+// Each chapter spans a set of source pages, each source page has a known outCount.
+// Sum allocations for chapter's source pages → chapter's output page count.
+function mapChaptersToOutputRangesByAllocations(
+  chapters: ChapterRange[],
+  allocations: { sourcePage: number; outCount: number }[],
+): { outStart: number; outEnd: number; label?: string }[] {
+  const ranges: { outStart: number; outEnd: number; label?: string }[] = [];
+  let cursor = 1;
+  // Build a quick lookup.
+  const allocByPage = new Map<number, number>();
+  for (const a of allocations) allocByPage.set(a.sourcePage, a.outCount);
+  for (const c of chapters) {
+    let cnt = 0;
+    for (let p = c.startPage; p <= c.endPage; p++) {
+      cnt += allocByPage.get(p) || 0;
+    }
+    if (cnt <= 0) continue;
+    ranges.push({ outStart: cursor, outEnd: cursor + cnt - 1, label: c.label });
+    cursor += cnt;
+  }
+  // Defensive clamp: if last chapter's outEnd doesn't match total, extend.
+  const totalOut = allocations.reduce((s, a) => s + a.outCount, 0);
+  if (ranges.length > 0 && ranges[ranges.length - 1].outEnd !== totalOut) {
+    ranges[ranges.length - 1].outEnd = totalOut;
+  }
+  return ranges;
+}
+
 function computePageSlicesFromSourceMap(
   ocrPages: OcrPage[],
   pages: GeneratedPage[],
@@ -858,6 +963,194 @@ async function detectBodyRange(
     onStatus?.('Trim: detection failed, using full range.');
     return { startPage: first, endPage: last };
   }
+}
+
+// ---------- Chapter detection (classic batch path) ----------
+
+interface ChapterRange {
+  startPage: number; // PDF page
+  endPage: number;   // PDF page
+  label?: string;
+}
+
+interface ChapterBatch {
+  startPage: number; // PDF
+  endPage: number;   // PDF
+  outStart: number;  // output page
+  outEnd: number;    // output page
+  label?: string;
+}
+
+function buildChapterDetectionPrompt(ocrPages: OcrPage[], range: BodyRange): string {
+  // Restrict previews to body range only.
+  const body = ocrPages.filter((p) => p.pageNum >= range.startPage && p.pageNum <= range.endPage);
+  const formatPreview = (p: OcrPage) => `P${p.pageNum}: ${p.text.substring(0, 200).replace(/\s+/g, ' ')}`;
+  let previews: string;
+  if (body.length > TRIM_PREVIEW_EDGE_THRESHOLD) {
+    // Sample evenly across the body — chapter starts can appear anywhere.
+    const step = Math.ceil(body.length / TRIM_PREVIEW_EDGE_THRESHOLD);
+    const sampled: OcrPage[] = [];
+    for (let i = 0; i < body.length; i += step) sampled.push(body[i]);
+    if (sampled[sampled.length - 1] !== body[body.length - 1]) sampled.push(body[body.length - 1]);
+    previews = sampled.map(formatPreview).join('\n');
+  } else {
+    previews = body.map(formatPreview).join('\n');
+  }
+  return `You are a book structure analyst. Identify the CHAPTER boundaries within the body range below. The body starts at page ${range.startPage} and ends at page ${range.endPage}.
+
+A chapter is any major top-level division of the book — Chapter 1, Chapter 2, etc., or named sections like "Part I: The Beginning", "Prologue", "Epilogue". Treat preface/foreword/introduction/prologue/epilogue/afterword as chapters too, when present.
+
+Rules:
+- Chapters must be contiguous and cover the ENTIRE range ${range.startPage}-${range.endPage} with no gaps and no overlaps.
+- Each chapter's startPage and endPage must be integers within ${range.startPage}-${range.endPage}.
+- The first chapter's startPage MUST equal ${range.startPage}. The last chapter's endPage MUST equal ${range.endPage}.
+- If you cannot detect distinct chapters, emit a single chapter spanning the full range.
+
+Use this EXACT text format. No JSON, no code fences, no text outside markers. One <<<CHAPTER N>>>...<<<END CHAPTER N>>> block per chapter, numbered from 1.
+
+<<<CHAPTER 1>>>
+startPage: <integer>
+endPage: <integer>
+label: <short label, e.g. "Chapter 1: The Awakening">
+<<<END CHAPTER 1>>>
+
+<<<CHAPTER 2>>>
+startPage: <integer>
+endPage: <integer>
+label: <short label>
+<<<END CHAPTER 2>>>
+
+--- PAGE PREVIEWS (body only) ---
+${previews}`;
+}
+
+function extractChapterRanges(raw: string, range: BodyRange): ChapterRange[] {
+  const re = /<<<\s*CHAPTER\s+(\d+)\s*>>>([\s\S]*?)<<<\s*END\s+CHAPTER\s+\1\s*>>>/gi;
+  const chapters: ChapterRange[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    const body = m[2];
+    const startPage = parseInt(body.match(/startPage\s*:\s*(\d+)/i)?.[1] || '0', 10);
+    const endPage = parseInt(body.match(/endPage\s*:\s*(\d+)/i)?.[1] || '0', 10);
+    const label = (body.match(/label\s*:\s*([^\n]+)/i)?.[1] || '').trim();
+    if (startPage > 0 && endPage >= startPage) {
+      chapters.push({ startPage, endPage, label: label || undefined });
+    }
+  }
+  // Validate: every chapter inside body range, contiguous.
+  const valid = chapters.every((c) => c.startPage >= range.startPage && c.endPage <= range.endPage);
+  if (!valid || chapters.length === 0) return [];
+  // Force first/last alignment + sort by startPage.
+  chapters.sort((a, b) => a.startPage - b.startPage);
+  // Repair small gaps/overlaps so coverage is complete.
+  for (let i = 0; i < chapters.length - 1; i++) {
+    if (chapters[i + 1].startPage !== chapters[i].endPage + 1) {
+      chapters[i + 1].startPage = chapters[i].endPage + 1;
+      if (chapters[i + 1].startPage > chapters[i + 1].endPage) {
+        chapters[i + 1].endPage = chapters[i + 1].startPage;
+      }
+    }
+  }
+  chapters[0].startPage = range.startPage;
+  chapters[chapters.length - 1].endPage = range.endPage;
+  return chapters;
+}
+
+async function detectChapters(
+  ocrPages: OcrPage[],
+  range: BodyRange,
+  callApi: TextCallFn,
+  onStatus?: (msg: string) => void,
+): Promise<ChapterRange[]> {
+  if (ocrPages.length === 0) return [];
+  onStatus?.('Detecting chapter boundaries...');
+  try {
+    const raw = stripWrapping(await callApi(buildChapterDetectionPrompt(ocrPages, range), { temperature: 0.2 }));
+    return extractChapterRanges(raw, range);
+  } catch (e) {
+    console.warn('Chapter detection failed', e);
+    onStatus?.('Chapter detection failed.');
+    return [];
+  }
+}
+
+// Map detected chapters to output-page ranges, proportional to PDF span.
+// Guarantees: covers 1..expectedPages exactly, no gaps, totals add up.
+function mapChaptersToOutputPages(
+  chapters: ChapterRange[],
+  expectedPages: number,
+  bodyStart: number,
+  bodyEnd: number,
+): ChapterBatch[] {
+  const bodySpan = bodyEnd - bodyStart + 1;
+  if (chapters.length === 0 || bodySpan <= 0 || expectedPages <= 0) return [];
+
+  // Guard: every chapter is forced to >=1 output page below, so chapters.length must
+  // not exceed expectedPages. Merge tail chapters until count <= expectedPages.
+  if (chapters.length > expectedPages) {
+    const merged: ChapterRange[] = chapters.slice(0, expectedPages - 1);
+    const tail = chapters.slice(expectedPages - 1);
+    const combined: ChapterRange = {
+      startPage: tail[0].startPage,
+      endPage: tail[tail.length - 1].endPage,
+      label: tail.map((c) => c.label).filter(Boolean).join(' + ') || undefined,
+    };
+    merged.push(combined);
+    chapters = merged;
+  }
+
+  // First pass: floor each chapter's share, track remainders.
+  const shares: { idx: number; raw: number; floor: number; remainder: number }[] = chapters.map((c, idx) => {
+    const span = c.endPage - c.startPage + 1;
+    const raw = (span / bodySpan) * expectedPages;
+    const floor = Math.floor(raw);
+    return { idx, raw, floor, remainder: raw - floor };
+  });
+
+  // Ensure each chapter gets at least 1 output page.
+  let assigned = shares.reduce((s, x) => s + Math.max(1, x.floor), 0);
+  const counts = shares.map((x) => Math.max(1, x.floor));
+
+  // Distribute leftover (or trim overflow) using largest-remainder.
+  let diff = expectedPages - assigned;
+  if (diff > 0) {
+    const order = [...shares].sort((a, b) => b.remainder - a.remainder);
+    for (let i = 0; i < order.length && diff > 0; i++) { counts[order[i].idx]++; diff--; }
+    // Wrap if still positive (rare).
+    while (diff > 0) {
+      for (let i = 0; i < counts.length && diff > 0; i++) { counts[i]++; diff--; }
+    }
+  } else if (diff < 0) {
+    // Remove from chapters with smallest remainder, but never below 1.
+    const order = [...shares].sort((a, b) => a.remainder - b.remainder);
+    for (let i = 0; i < order.length && diff < 0; i++) {
+      if (counts[order[i].idx] > 1) { counts[order[i].idx]--; diff++; }
+    }
+    while (diff < 0) {
+      let progressed = false;
+      for (let i = 0; i < counts.length && diff < 0; i++) {
+        if (counts[i] > 1) { counts[i]--; diff++; progressed = true; }
+      }
+      if (!progressed) break; // can't shrink further (every chapter at 1)
+    }
+  }
+
+  const batches: ChapterBatch[] = [];
+  let cursor = 1;
+  for (let i = 0; i < chapters.length; i++) {
+    const c = chapters[i];
+    const cnt = counts[i];
+    if (cnt <= 0) continue;
+    const outStart = cursor;
+    const outEnd = cursor + cnt - 1;
+    batches.push({ startPage: c.startPage, endPage: c.endPage, outStart, outEnd, label: c.label });
+    cursor = outEnd + 1;
+  }
+  // Final clamp to expectedPages.
+  if (batches.length > 0 && batches[batches.length - 1].outEnd !== expectedPages) {
+    batches[batches.length - 1].outEnd = expectedPages;
+  }
+  return batches;
 }
 
 interface WordCountTask {
@@ -1033,10 +1326,10 @@ async function _generateInBatchesInner(
   const totalPdfPages = ocrPages.length;
   const expectedPages = computeExpectedPages(format, totalPdfPages);
 
-  // All processing strategies are Ultra-only. Strip flags entirely for Mini/Pro so they
-  // run the classic single-shot/batch path regardless of stored toggle state.
+  // perPageSmoothing/wordCountAllocation are Ultra-only. Strip them for Mini/Pro so they
+  // run the classic single-shot/batch path. chapterDetection applies to ALL formats.
   if (format !== 'ultra') {
-    flags = {};
+    flags = { chapterDetection: flags.chapterDetection };
   }
 
   // Resume hydration: load existing progress + check path/flag compat.
@@ -1103,6 +1396,33 @@ async function _generateInBatchesInner(
       throw new Error('Word-count allocation produced zero output pages — body is too sparse.');
     }
 
+    // Phase 1.5 — chapter detection (used by smoothing). Cached on progress.
+    const useChapterDetectionWC = flags.chapterDetection !== false;
+    let wcChapterBatches: ChapterBatch[] = prior?.chapters ?? [];
+    if (useChapterDetectionWC && wcChapterBatches.length === 0) {
+      const detected = await detectChapters(ocrPages, range!, callApi, onStatus);
+      const usable =
+        detected.length > 0 &&
+        !(detected.length === 1 && outputCount > BATCH_SIZE * 2);
+      if (usable) {
+        const ranges = mapChaptersToOutputRangesByAllocations(detected, allocations);
+        // Convert to ChapterBatch shape (PDF range from detected, output range computed).
+        wcChapterBatches = detected.map((c, i) => ({
+          startPage: c.startPage,
+          endPage: c.endPage,
+          outStart: ranges[i]?.outStart ?? 0,
+          outEnd: ranges[i]?.outEnd ?? 0,
+          label: c.label,
+        })).filter((b) => b.outStart > 0 && b.outEnd >= b.outStart);
+      }
+      if (wcChapterBatches.length > 0 && progressCtx) {
+        await saveProgress(progressCtx, { chapters: wcChapterBatches });
+      } else if (wcChapterBatches.length === 0) {
+        onStatus?.('Chapter detection failed — falling back to fixed chunks.');
+        console.warn('[geminiAdmin] wordCount chapter detection unusable; smoothing will use fixed chunks');
+      }
+    }
+
     // Phase 2 — per-page generation honoring allocation. Resume mid-loop if applicable.
     const wcResumeFrom = prior?.lastCompletedPhase === 'wcGen' && prior.rawPages
       ? {
@@ -1156,14 +1476,20 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       }
     }
 
-    // Phase 3 — smoothing (reuse existing). Resume from chunk if applicable.
+    // Phase 3 — smoothing. Per-chapter when chapter detection produced ranges, else fixed chunks.
     onStatus?.('Smoothing pass...');
     const smoothResume = prior?.lastCompletedPhase === 'smooth' && prior.smoothedPages
       ? { pages: prior.smoothedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
       : null;
-    let pages = smoothResume
-      ? await smoothPages(format, smoothResume.pages, callApi, voiceCard, onStatus, progressCtx, smoothResume.fromIdx)
-      : await smoothPages(format, rawPages, callApi, voiceCard, onStatus, progressCtx);
+    const wcSmoothInput = smoothResume ? smoothResume.pages : rawPages;
+    const wcSmoothFrom = smoothResume ? smoothResume.fromIdx : 0;
+    let pages: GeneratedPage[];
+    if (useChapterDetectionWC && wcChapterBatches.length > 0) {
+      const wcRanges = wcChapterBatches.map((c) => ({ outStart: c.outStart, outEnd: c.outEnd, label: c.label }));
+      pages = await smoothPagesByChapters(format, wcSmoothInput, wcRanges, callApi, voiceCard, onStatus, progressCtx, wcSmoothFrom);
+    } else {
+      pages = await smoothPages(format, wcSmoothInput, callApi, voiceCard, onStatus, progressCtx, wcSmoothFrom);
+    }
 
     // Validator uses source-map slicing per output page.
     const slices = computePageSlicesFromSourceMap(ocrPages, pages, sourceByOutput);
@@ -1179,6 +1505,34 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
 
   // Strategy 3: Per-Page Generation + Chunked Smoothing path.
   if (flags.perPageSmoothing) {
+    const useChapterDetectionPP = flags.chapterDetection !== false;
+    // Detect chapters up-front so smoothing can run per-chapter. Cache to progress.
+    let ppChapterBatches: ChapterBatch[] = prior?.chapters ?? [];
+    if (useChapterDetectionPP && ppChapterBatches.length === 0) {
+      // Trim body first so chapter detection skips front/back matter (TOC, copyright, index, etc.)
+      // Otherwise those get treated as chapters and rob output budget from real body chapters.
+      let ppBodyRange: BodyRange;
+      if (prior?.bodyRange) {
+        ppBodyRange = prior.bodyRange;
+      } else {
+        ppBodyRange = await detectBodyRange(ocrPages, callApi, onStatus);
+        if (progressCtx) await saveProgress(progressCtx, { bodyRange: ppBodyRange });
+      }
+      const detected = await detectChapters(ocrPages, ppBodyRange, callApi, onStatus);
+      const usable =
+        detected.length > 0 &&
+        !(detected.length === 1 && expectedPages > BATCH_SIZE * 2);
+      if (usable) {
+        ppChapterBatches = mapChaptersToOutputPages(detected, expectedPages, ppBodyRange.startPage, ppBodyRange.endPage);
+      }
+      if (ppChapterBatches.length > 0 && progressCtx) {
+        await saveProgress(progressCtx, { chapters: ppChapterBatches });
+      } else if (ppChapterBatches.length === 0) {
+        onStatus?.('Chapter detection failed — falling back to fixed chunks.');
+        console.warn('[geminiAdmin] perPage chapter detection unusable; smoothing will use fixed chunks');
+      }
+    }
+
     const ppResume = prior?.lastCompletedPhase === 'perPageGen' && prior.rawPages
       ? { startIdx: (prior.lastCompletedIndex ?? -1) + 1, existingPages: prior.rawPages }
       : undefined;
@@ -1222,14 +1576,19 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       }
     }
 
-    // Smoothing pass.
+    // Smoothing pass — per-chapter when chapter detection produced ranges, else fixed chunks.
     onStatus?.('Smoothing pass...');
     const smoothResume = prior?.lastCompletedPhase === 'smooth' && prior.smoothedPages
       ? { pages: prior.smoothedPages, fromIdx: (prior.lastCompletedIndex ?? -1) + 1 }
       : null;
-    pages = smoothResume
-      ? await smoothPages(format, smoothResume.pages, callApi, voiceCard, onStatus, progressCtx, smoothResume.fromIdx)
-      : await smoothPages(format, pages, callApi, voiceCard, onStatus, progressCtx);
+    const ppSmoothInput = smoothResume ? smoothResume.pages : pages;
+    const ppSmoothFrom = smoothResume ? smoothResume.fromIdx : 0;
+    if (useChapterDetectionPP && ppChapterBatches.length > 0) {
+      const ranges = ppChapterBatches.map((c) => ({ outStart: c.outStart, outEnd: c.outEnd, label: c.label }));
+      pages = await smoothPagesByChapters(format, ppSmoothInput, ranges, callApi, voiceCard, onStatus, progressCtx, ppSmoothFrom);
+    } else {
+      pages = await smoothPages(format, ppSmoothInput, callApi, voiceCard, onStatus, progressCtx, ppSmoothFrom);
+    }
 
     // Validator still runs (word-cap + fabrication check).
     const slices = computePageSlicesFromAllocations(ocrPages, pages, allocations, expectedPages, totalPdfPages);
@@ -1275,39 +1634,100 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     };
   }
 
-  // Batch mode — split OCR text into uniform chunks.
-  const batches: { startPage: number; endPage: number; count: number; pdfStart: number; pdfEnd: number; text: string }[] = [];
+  // Batch mode — chapter-based batching (one batch per detected chapter) when toggle ON.
+  // When OFF, use legacy fixed-20 batching over the full PDF (no body trim).
+  const useChapterDetection = flags.chapterDetection !== false; // default true
+  let chapterBatches: ChapterBatch[] = prior?.chapters ?? [];
 
-  for (let i = 0; i < expectedPages; i += BATCH_SIZE) {
-      const startPage = i + 1;
-      const endPage = Math.min(i + BATCH_SIZE, expectedPages);
-      const count = endPage - startPage + 1;
-      const pdfStart = Math.floor((startPage - 1) / expectedPages * totalPdfPages) + 1;
-      const pdfEnd = Math.min(Math.floor(endPage / expectedPages * totalPdfPages), totalPdfPages);
+  if (useChapterDetection) {
+    // Step 1: pick body range. Reuse prior if present (e.g. resumed run); otherwise run
+    // body-trim detection so chapter detection sees only body (skips front/back matter).
+    let bodyForChapters: BodyRange;
+    if (prior?.bodyRange) {
+      bodyForChapters = prior.bodyRange;
+    } else {
+      bodyForChapters = await detectBodyRange(ocrPages, callApi, onStatus);
+      if (progressCtx) await saveProgress(progressCtx, { bodyRange: bodyForChapters });
+    }
 
-      const chunkPages = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
-      const text = chunkPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
-      batches.push({ startPage, endPage, count, pdfStart, pdfEnd, text });
+    // Step 2: chapter detection (or reuse from prior progress).
+    if (chapterBatches.length === 0) {
+      const detected = await detectChapters(ocrPages, bodyForChapters, callApi, onStatus);
+      // Sanity guards — fall back to fixed-20 batching if detection is unusable.
+      const usable =
+        detected.length > 0 &&
+        // Reject single-chapter result for very long books — defeats the point of batching.
+        !(detected.length === 1 && expectedPages > BATCH_SIZE * 2);
+      if (usable) {
+        chapterBatches = mapChaptersToOutputPages(detected, expectedPages, bodyForChapters.startPage, bodyForChapters.endPage);
+      }
+      if (chapterBatches.length === 0) {
+        console.warn('[geminiAdmin] chapter detection unusable; falling back to fixed-20 batching');
+        onStatus?.('Chapter detection failed — falling back to fixed chunks.');
+        // Build legacy fixed-batch ChapterBatch list so the rest of the loop is uniform.
+        // Map output pages proportionally over the detected body range, not the full PDF.
+        const bodySpan = bodyForChapters.endPage - bodyForChapters.startPage + 1;
+        for (let i = 0; i < expectedPages; i += BATCH_SIZE) {
+          const outStart = i + 1;
+          const outEnd = Math.min(i + BATCH_SIZE, expectedPages);
+          const pdfStart = bodyForChapters.startPage + Math.floor(((outStart - 1) / expectedPages) * bodySpan);
+          const pdfEnd = Math.min(
+            bodyForChapters.startPage + Math.floor((outEnd / expectedPages) * bodySpan) - 1,
+            bodyForChapters.endPage,
+          );
+          chapterBatches.push({ startPage: pdfStart, endPage: Math.max(pdfStart, pdfEnd), outStart, outEnd });
+        }
+      }
+      if (progressCtx) await saveProgress(progressCtx, { chapters: chapterBatches });
+    }
+  } else if (chapterBatches.length === 0) {
+    // Legacy fixed-20 batching over full PDF — no body trim, no chapter detection.
+    for (let i = 0; i < expectedPages; i += BATCH_SIZE) {
+      const outStart = i + 1;
+      const outEnd = Math.min(i + BATCH_SIZE, expectedPages);
+      const pdfStart = 1 + Math.floor(((outStart - 1) / expectedPages) * totalPdfPages);
+      const pdfEnd = Math.min(Math.floor((outEnd / expectedPages) * totalPdfPages), totalPdfPages);
+      chapterBatches.push({ startPage: pdfStart, endPage: Math.max(pdfStart, pdfEnd), outStart, outEnd });
+    }
+    if (progressCtx) await saveProgress(progressCtx, { chapters: chapterBatches });
   }
 
   let title = prior?.meta?.title || '';
   let author = prior?.meta?.author || '';
   let summary = prior?.meta?.summary || '';
-  // Resume from prior raw pages if same path (classic batch).
-  const startBatchIdx = (prior?.lastCompletedPhase === 'batchGen' && prior?.rawPages)
-    ? (prior.lastCompletedIndex ?? -1) + 1
-    : 0;
+
+  // Resume support — only valid if prior batch count matches current chapterBatches length.
+  // If a prior run used fixed-20 batching (different count), invalidate resume.
+  const priorCanResume =
+    prior?.lastCompletedPhase === 'batchGen' &&
+    prior?.rawPages &&
+    Array.isArray(prior.chapters) &&
+    prior.chapters.length === chapterBatches.length;
+  const startBatchIdx = priorCanResume ? (prior!.lastCompletedIndex ?? -1) + 1 : 0;
+  if (!priorCanResume && prior?.lastCompletedPhase === 'batchGen') {
+    console.warn('[geminiAdmin] prior batch progress incompatible with chapter batching; restarting');
+  }
   const allPages: GeneratedPage[] = startBatchIdx > 0 && prior?.rawPages ? [...prior.rawPages] : [];
 
-  for (let b = startBatchIdx; b < batches.length; b++) {
-    const { startPage, endPage, count, pdfStart, pdfEnd, text } = batches[b];
-    onStatus?.(`Batch ${b + 1}/${batches.length} — generating pages ${startPage}-${endPage} (PDF pages ${pdfStart}-${pdfEnd})...`);
+  for (let b = startBatchIdx; b < chapterBatches.length; b++) {
+    const ch = chapterBatches[b];
+    const startPage = ch.outStart;
+    const endPage = ch.outEnd;
+    const count = endPage - startPage + 1;
+    const pdfStart = ch.startPage;
+    const pdfEnd = ch.endPage;
+    const labelPart = ch.label ? ` "${ch.label}"` : '';
+
+    const chunkPages = ocrPages.filter((p) => p.pageNum >= pdfStart && p.pageNum <= pdfEnd);
+    const text = chunkPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
+
+    onStatus?.(`Chapter ${b + 1}/${chapterBatches.length}${labelPart} — generating output pages ${startPage}-${endPage} (PDF pages ${pdfStart}-${pdfEnd})...`);
 
     const prompt = buildBatchPrompt(
-      format, b, batches.length,
+      format, b, chapterBatches.length,
       startPage, endPage, count,
       expectedPages, pdfStart, pdfEnd, totalPdfPages,
-      text, voiceCard,
+      text, voiceCard, ch.label,
     );
 
     const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
@@ -1320,7 +1740,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     }
 
     if (!Array.isArray(parsed?.pages) || parsed.pages.length === 0) {
-      throw new Error(`Batch ${b + 1}/${batches.length} (pages ${startPage}-${endPage}) returned no pages`);
+      throw new Error(`Chapter ${b + 1}/${chapterBatches.length} (pages ${startPage}-${endPage}) returned no pages`);
     }
 
     let pages: GeneratedPage[] = parsed.pages.slice(0, count).map((p: any, i: number) => ({
@@ -1330,10 +1750,10 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
 
     const emptyCount = pages.filter((p) => !p.content.trim()).length;
     if (emptyCount === pages.length) {
-      throw new Error(`Batch ${b + 1}/${batches.length} (pages ${startPage}-${endPage}) returned empty content for all pages`);
+      throw new Error(`Chapter ${b + 1}/${chapterBatches.length} (pages ${startPage}-${endPage}) returned empty content for all pages`);
     }
 
-    onStatus?.(`Validating batch ${b + 1}/${batches.length}...`);
+    onStatus?.(`Validating chapter ${b + 1}/${chapterBatches.length}${labelPart}...`);
     const slices = computePageSlices(ocrPages, pages, pdfStart, pdfEnd);
     pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
 
