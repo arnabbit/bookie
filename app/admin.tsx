@@ -22,7 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL, useAuth } from '@/lib/AuthContext';
 import { colors, fonts, radius, shadows, FORMAT_DISPLAY } from '@/lib/theme';
 import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage, StrategyFlags, cancelCurrentBatchRequest, DEFAULT_WORD_COUNT_MAX } from '@/lib/geminiAdmin';
-import { clearProgress, loadProgress } from '@/lib/genProgress';
+import { clearProgress, loadProgress, rewindTo, PHASE_ORDER, ProgressState } from '@/lib/genProgress';
 
 const WORD_CAP_STORAGE_KEY = 'admin.wordCountMax';
 const STRATEGY_STORAGE_KEYS = {
@@ -65,6 +65,7 @@ export default function AdminScreen() {
   const [activeFormat, setActiveFormat] = useState<FormatKey>('mini');
   const [generating, setGenerating] = useState(false);
   const [genStatus, setGenStatus] = useState('');
+  const [progressSnapshot, setProgressSnapshot] = useState<ProgressState | null>(null);
   const [editingPageIdx, setEditingPageIdx] = useState<number | null>(null);
   const [editPageContent, setEditPageContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -197,6 +198,22 @@ export default function AdminScreen() {
       if (generatingRef.current) cancelCurrentBatchRequest();
     };
   }, []);
+
+  // Poll progress snapshot while generating; also load once when a book is opened or format switches.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      if (!editingBook) { setProgressSnapshot(null); return; }
+      try {
+        const p = await loadProgress(editingBook._id, activeFormat);
+        if (!cancelled) setProgressSnapshot(p);
+      } catch {}
+    };
+    refresh();
+    if (!generating) return () => { cancelled = true; };
+    const id = setInterval(refresh, 1500);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [generating, editingBook, activeFormat]);
 
   // Open book editor
   const openBook = async (bookId: string) => {
@@ -331,6 +348,30 @@ export default function AdminScreen() {
     } finally {
       setGenerating(false);
     }
+  };
+
+  // Rewind to a phase (optional unit index). Confirms, then rewinds + restarts the last gen attempt.
+  const requestRewind = (phase: string, index?: number) => {
+    if (!editingBook || generating) return;
+    const label = typeof index === 'number' ? `${phase} #${index + 1}` : phase;
+    Alert.alert(
+      'Rewind?',
+      `Rewind to ${label}? Later progress will be discarded.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Rewind',
+          style: 'destructive',
+          onPress: async () => {
+            await rewindTo({ bookId: editingBook._id, format: activeFormat }, phase, index);
+            const fresh = await loadProgress(editingBook._id, activeFormat);
+            setProgressSnapshot(fresh);
+            const attempt = lastGenAttemptRef.current;
+            if (attempt) await runGen(attempt.kind, attempt.args);
+          },
+        },
+      ],
+    );
   };
 
   const retryGen = async () => {
@@ -766,6 +807,39 @@ export default function AdminScreen() {
               </View>
             )}
 
+            {progressSnapshot && (
+              <View style={s.timelineWrap}>
+                <Text style={s.timelineTitle}>Checkpoints</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.timelineRow}>
+                  {(() => {
+                    const snap = progressSnapshot;
+                    const lastIdx = snap.lastCompletedPhase ? PHASE_ORDER.indexOf(snap.lastCompletedPhase) : -1;
+                    return PHASE_ORDER.map((phase) => {
+                      // State: filled = completed, half = in-progress (current phase mid-loop), empty = future.
+                      let state: 'filled' | 'half' | 'empty' = 'empty';
+                      const idx = PHASE_ORDER.indexOf(phase);
+                      if (idx < lastIdx) state = 'filled';
+                      else if (idx === lastIdx) {
+                        state = typeof snap.lastCompletedIndex === 'number' ? 'half' : 'filled';
+                      }
+                      const bg = state === 'filled' ? colors.tertiary : state === 'half' ? colors.surfaceContainerHigh : colors.surfaceContainerLow;
+                      const border = state === 'half' ? colors.tertiary : 'transparent';
+                      return (
+                        <TouchableOpacity
+                          key={phase}
+                          disabled={generating}
+                          onPress={() => requestRewind(phase)}
+                          style={[s.timelineCircle, { backgroundColor: bg, borderColor: border, opacity: generating ? 0.5 : 1 }]}
+                        >
+                          <Text style={s.timelineLabel} numberOfLines={1}>{phase}</Text>
+                        </TouchableOpacity>
+                      );
+                    });
+                  })()}
+                </ScrollView>
+              </View>
+            )}
+
             {generating && (
               <View style={s.genStatus}>
                 <ActivityIndicator size="small" color={colors.tertiary} />
@@ -1100,6 +1174,11 @@ const s = StyleSheet.create({
     paddingVertical: 12,
   },
   actionBtnText: { fontFamily: fonts.bodySemiBold, fontSize: 13, color: colors.onSurface },
+  timelineWrap: { marginTop: 12, marginBottom: 8 },
+  timelineTitle: { fontFamily: fonts.bodyBold, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.2, color: colors.onSurfaceVariant, marginBottom: 6 },
+  timelineRow: { flexDirection: 'row', gap: 8, paddingVertical: 4, paddingHorizontal: 2 },
+  timelineCircle: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1.5, minWidth: 70, alignItems: 'center' },
+  timelineLabel: { fontFamily: fonts.bodySemiBold, fontSize: 11, color: colors.onSurface },
 
   genStatus: {
     flexDirection: 'row',

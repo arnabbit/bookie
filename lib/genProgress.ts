@@ -3,7 +3,15 @@ import type { GeneratedPage, StrategyFlags } from './geminiAdmin';
 
 // Bumped from 1 → 2 after removing semanticChunking / backCheck / highlightMap
 // strategies and their progress fields (highlights, importance, backCheckedPages).
-export const SCHEMA_VERSION = 2;
+// Bumped from 2 → 3 after adding validatedUnits map (per-unit validator memo).
+export const SCHEMA_VERSION = 3;
+
+// Phase order for the rewind timeline. Earlier = closer to start.
+export const PHASE_ORDER: string[] = [
+  'voiceCard', 'trim', 'allocate', 'chapters',
+  'batchGen', 'wcGen', 'perPageGen',
+  'meta', 'smooth', 'validate', 'done',
+];
 
 export type GenPath = 'classic' | 'perPage' | 'wordCount';
 export type GenFormat = 'mini' | 'pro' | 'ultra';
@@ -36,6 +44,9 @@ export interface ProgressState {
   lastCompletedIndex?: number;
   failedPhase?: string;
   failedReason?: string;
+  // Memo of unit keys (e.g. "batchGen:3", "smooth:1") that already passed per-unit validation.
+  // Cleared selectively by rewindTo.
+  validatedUnits?: Record<string, true>;
 }
 
 export interface ProgressCtx {
@@ -118,6 +129,81 @@ export function resolvePath(format: GenFormat, flags: StrategyFlags): GenPath {
   if (flags.wordCountAllocation) return 'wordCount';
   if (flags.perPageSmoothing) return 'perPage';
   return 'classic';
+}
+
+// Rewind progress to a target phase (and optional unit index within that phase).
+// Drops downstream-phase outputs and clears validatedUnits keys for phases at-or-after the target.
+// Caller is responsible for restarting generation after this returns.
+export async function rewindTo(
+  ctx: ProgressCtx | undefined,
+  phase: string,
+  index?: number,
+): Promise<void> {
+  if (!ctx) return;
+  const prior = await loadProgress(ctx.bookId, ctx.format);
+  if (!prior) return;
+
+  const targetIdx = PHASE_ORDER.indexOf(phase);
+  if (targetIdx < 0) {
+    console.warn('[genProgress] rewindTo unknown phase', phase);
+    return;
+  }
+
+  const next: ProgressState = { ...prior };
+
+  // Drop fields produced by phases >= target.
+  const drop = (p: string) => PHASE_ORDER.indexOf(p) >= targetIdx;
+  if (drop('voiceCard')) next.voiceCard = undefined;
+  if (drop('trim')) next.bodyRange = undefined;
+  if (drop('allocate')) next.allocations = undefined;
+  if (drop('chapters')) next.chapters = undefined;
+  if (drop('batchGen') || drop('wcGen') || drop('perPageGen')) {
+    next.rawPages = undefined;
+    next.sourceByOutput = undefined;
+  }
+  if (drop('meta')) next.meta = undefined;
+  if (drop('smooth')) next.smoothedPages = undefined;
+  if (drop('validate')) next.validatedPages = undefined;
+
+  // Clear validatedUnits matching target phase or later.
+  if (next.validatedUnits) {
+    const cleaned: Record<string, true> = {};
+    for (const k of Object.keys(next.validatedUnits)) {
+      const ph = k.split(':')[0];
+      const phIdx = PHASE_ORDER.indexOf(ph);
+      if (phIdx >= 0 && phIdx < targetIdx) cleaned[k] = true;
+    }
+    next.validatedUnits = cleaned;
+  }
+
+  // Set resume cursor: target phase, index = (provided index - 1) so loop resumes AT index.
+  // Convention used in geminiAdmin: resume = lastCompletedIndex + 1.
+  if (typeof index === 'number' && index > 0) {
+    // Find the closest predecessor phase so we resume mid-phase at index.
+    next.lastCompletedPhase = phase;
+    next.lastCompletedIndex = index - 1;
+  } else {
+    // Resume at start of target phase: pretend predecessor phase just completed.
+    const predIdx = targetIdx - 1;
+    next.lastCompletedPhase = predIdx >= 0 ? PHASE_ORDER[predIdx] : undefined;
+    next.lastCompletedIndex = undefined;
+  }
+
+  next.failedPhase = undefined;
+  next.failedReason = undefined;
+
+  await saveProgress(ctx, next);
+}
+
+// Mark a per-unit validation as complete so future runs skip re-validation of that unit.
+export async function markUnitValidated(
+  ctx: ProgressCtx | undefined,
+  unitKey: string,
+): Promise<void> {
+  if (!ctx) return;
+  const prior = await loadProgress(ctx.bookId, ctx.format);
+  const validatedUnits = { ...(prior?.validatedUnits || {}), [unitKey]: true as const };
+  await saveProgress(ctx, { validatedUnits });
 }
 
 // Compare two flag objects after path resolution — they're "compatible" if they yield the same path.

@@ -5,6 +5,7 @@ import {
   clearProgress,
   resolvePath,
   flagsCompatible,
+  markUnitValidated,
   SCHEMA_VERSION,
   ProgressCtx,
   ProgressState,
@@ -90,7 +91,7 @@ const VOICE_CARD_MIN_PAGES = 3;
 type FormatType = 'mini' | 'pro' | 'ultra';
 
 // Tuning — chosen defaults per admin-plans.md open Q's.
-const SMOOTHING_CHUNK_SIZE = 5;
+export const SMOOTHING_CHUNK_SIZE = 5;
 const WORD_COUNT_DIVISOR = 240;
 const WORD_COUNT_ROUND_THRESHOLD = 0.3;
 // Front/back matter lives at edges — sample only N pages from each side when source exceeds threshold to avoid context bloat.
@@ -453,6 +454,37 @@ async function validateAndRepair(
   }
   if (progressCtx) await saveProgress(progressCtx, { validatedPages: result, lastCompletedPhase: 'validate' });
   return result;
+}
+
+// Per-unit validator. Short-circuits if prior.validatedUnits[unitKey] === true.
+// On per-unit failure, logs warning and returns input pages unchanged (matches today's
+// permissive behavior elsewhere in the pipeline). Marks the unit validated on success.
+async function validateUnit(
+  callApi: TextCallFn,
+  format: FormatType,
+  unitPages: GeneratedPage[],
+  slices: PageSlice[],
+  wordCountMax: number,
+  onStatus: ((msg: string) => void) | undefined,
+  voiceCard: string,
+  progressCtx: ProgressCtx | undefined,
+  unitKey: string,
+): Promise<GeneratedPage[]> {
+  if (progressCtx) {
+    const prior = await loadProgress(progressCtx.bookId, progressCtx.format);
+    if (prior?.validatedUnits?.[unitKey]) {
+      return unitPages;
+    }
+  }
+  try {
+    const result = await validateAndRepair(callApi, format, unitPages, slices, wordCountMax, onStatus, voiceCard);
+    if (progressCtx) await markUnitValidated(progressCtx, unitKey);
+    return result;
+  } catch (e) {
+    console.warn(`[geminiAdmin] per-unit validate failed (${unitKey}); continuing`, e);
+    onStatus?.(`Validator skipped for ${unitKey} (continuing).`);
+    return unitPages;
+  }
 }
 
 // ---------- Retry helper ----------
@@ -1491,10 +1523,33 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       pages = await smoothPages(format, wcSmoothInput, callApi, voiceCard, onStatus, progressCtx, wcSmoothFrom);
     }
 
-    // Validator uses source-map slicing per output page.
+    // Validator uses source-map slicing per output page. Chunked + memoized per unit.
     const slices = computePageSlicesFromSourceMap(ocrPages, pages, sourceByOutput);
     onStatus?.('Validating pages against source...');
-    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
+    {
+      const units = useChapterDetectionWC && wcChapterBatches.length > 0
+        ? wcChapterBatches.map((c, i) => ({ key: `validate:wc:${i}`, outStart: c.outStart, outEnd: c.outEnd }))
+        : (() => {
+            const out: { key: string; outStart: number; outEnd: number }[] = [];
+            for (let i = 0; i < pages.length; i += SMOOTHING_CHUNK_SIZE) {
+              out.push({ key: `validate:wc:${i / SMOOTHING_CHUNK_SIZE}`, outStart: pages[i].pageNumber, outEnd: pages[Math.min(i + SMOOTHING_CHUNK_SIZE - 1, pages.length - 1)].pageNumber });
+            }
+            return out;
+          })();
+      const merged: GeneratedPage[] = [];
+      for (const u of units) {
+        const subset = pages.filter((p) => p.pageNumber >= u.outStart && p.pageNumber <= u.outEnd);
+        const subSlices = slices.filter((s) => s.pageNumber >= u.outStart && s.pageNumber <= u.outEnd);
+        const validated = await validateUnit(callApi, format, subset, subSlices, wordCountMax, onStatus, voiceCard, progressCtx, u.key);
+        merged.push(...validated);
+      }
+      // Preserve any pages outside unit ranges unchanged.
+      const covered = new Set(merged.map((p) => p.pageNumber));
+      for (const p of pages) if (!covered.has(p.pageNumber)) merged.push(p);
+      merged.sort((a, b) => a.pageNumber - b.pageNumber);
+      pages = merged;
+      if (progressCtx) await saveProgress(progressCtx, { validatedPages: pages, lastCompletedPhase: 'validate' });
+    }
 
     if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return { title, author, summary, pages };
@@ -1590,10 +1645,32 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       pages = await smoothPages(format, ppSmoothInput, callApi, voiceCard, onStatus, progressCtx, ppSmoothFrom);
     }
 
-    // Validator still runs (word-cap + fabrication check).
+    // Validator still runs (word-cap + fabrication check). Chunked + memoized per unit.
     const slices = computePageSlicesFromAllocations(ocrPages, pages, allocations, expectedPages, totalPdfPages);
     onStatus?.('Validating pages against source...');
-    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
+    {
+      const units = useChapterDetectionPP && ppChapterBatches.length > 0
+        ? ppChapterBatches.map((c, i) => ({ key: `validate:pp:${i}`, outStart: c.outStart, outEnd: c.outEnd }))
+        : (() => {
+            const out: { key: string; outStart: number; outEnd: number }[] = [];
+            for (let i = 0; i < pages.length; i += SMOOTHING_CHUNK_SIZE) {
+              out.push({ key: `validate:pp:${i / SMOOTHING_CHUNK_SIZE}`, outStart: pages[i].pageNumber, outEnd: pages[Math.min(i + SMOOTHING_CHUNK_SIZE - 1, pages.length - 1)].pageNumber });
+            }
+            return out;
+          })();
+      const merged: GeneratedPage[] = [];
+      for (const u of units) {
+        const subset = pages.filter((p) => p.pageNumber >= u.outStart && p.pageNumber <= u.outEnd);
+        const subSlices = slices.filter((s) => s.pageNumber >= u.outStart && s.pageNumber <= u.outEnd);
+        const validated = await validateUnit(callApi, format, subset, subSlices, wordCountMax, onStatus, voiceCard, progressCtx, u.key);
+        merged.push(...validated);
+      }
+      const covered = new Set(merged.map((p) => p.pageNumber));
+      for (const p of pages) if (!covered.has(p.pageNumber)) merged.push(p);
+      merged.sort((a, b) => a.pageNumber - b.pageNumber);
+      pages = merged;
+      if (progressCtx) await saveProgress(progressCtx, { validatedPages: pages, lastCompletedPhase: 'validate' });
+    }
 
     if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return { title, author, summary, pages };
@@ -1755,7 +1832,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
 
     onStatus?.(`Validating chapter ${b + 1}/${chapterBatches.length}${labelPart}...`);
     const slices = computePageSlices(ocrPages, pages, pdfStart, pdfEnd);
-    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard);
+    pages = await validateUnit(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx, `batchGen:${b}`);
 
     allPages.push(...pages);
 
