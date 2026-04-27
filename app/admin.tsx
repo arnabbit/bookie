@@ -21,14 +21,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL, useAuth } from '@/lib/AuthContext';
 import { colors, fonts, radius, shadows, FORMAT_DISPLAY } from '@/lib/theme';
-import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage, StrategyFlags, cancelCurrentBatchRequest, DEFAULT_WORD_COUNT_MAX } from '@/lib/geminiAdmin';
-import { clearProgress, loadProgress, rewindTo, PHASE_ORDER, ProgressState } from '@/lib/genProgress';
+import { generateFormatFromPdf, generateFormatFromPdfOpenRouter, generateFormatFromFull, generateFormatFromFullOpenRouter, GeneratedPage, StrategyFlags, cancelCurrentBatchRequest, DEFAULT_WORD_COUNT_MAX, VOICE_CARD_PENDING_CODE } from '@/lib/geminiAdmin';
+import { clearProgress, loadProgress, rewindTo, saveProgress, PHASE_ORDER, ProgressState } from '@/lib/genProgress';
 
 const WORD_CAP_STORAGE_KEY = 'admin.wordCountMax';
 const STRATEGY_STORAGE_KEYS = {
   perPageSmoothing: 'admin.strategy.perPageSmoothing',
   wordCountAllocation: 'admin.strategy.wordCountAllocation',
   chapterDetection: 'admin.strategy.chapterDetection',
+  voiceCard: 'admin.strategy.voiceCard',
 } as const;
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
@@ -93,6 +94,8 @@ export default function AdminScreen() {
   const [wordCountAllocation, setWordCountAllocation] = useState(false);
   // Chapter detection applies to all formats. Default ON.
   const [chapterDetection, setChapterDetection] = useState(true);
+  // Voice card extraction. Default OFF. When ON, gen pauses for user approval.
+  const [voiceCardEnabled, setVoiceCardEnabled] = useState(false);
   // Error popup
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Generation error modal (separate flow — supports retry/discard).
@@ -100,12 +103,15 @@ export default function AdminScreen() {
   type GenKind = 'pdfGemini' | 'pdfOR' | 'pdfORCustom' | 'fromFull' | 'fromFullOR' | 'fromFullORCustom';
   type GenAttempt = { kind: GenKind; args: any } | null;
   const lastGenAttemptRef = useRef<GenAttempt>(null);
+  // Voice card approval modal state.
+  const [voiceCardModal, setVoiceCardModal] = useState<{ text: string; bookId: string; format: FormatKey } | null>(null);
+  const [voiceCardEditText, setVoiceCardEditText] = useState('');
 
   // Strategies only apply for Ultra. Strip everything for Mini/Pro so the runtime
   // sees the classic path regardless of toggle state in storage.
   const strategyFlags: StrategyFlags = activeFormat === 'ultra'
-    ? { perPageSmoothing, wordCountAllocation, chapterDetection }
-    : { chapterDetection };
+    ? { perPageSmoothing, wordCountAllocation, chapterDetection, voiceCard: voiceCardEnabled }
+    : { chapterDetection, voiceCard: voiceCardEnabled };
 
   const wordCountMax = (() => {
     const n = parseInt(wordCountMaxText, 10);
@@ -178,6 +184,8 @@ export default function AdminScreen() {
         if (wc != null) setWordCountAllocation(wc === '1');
         const cd = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.chapterDetection);
         if (cd != null) setChapterDetection(cd === '1');
+        const vc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.voiceCard);
+        if (vc != null) setVoiceCardEnabled(vc === '1');
       } catch {}
     })();
   }, []);
@@ -185,6 +193,7 @@ export default function AdminScreen() {
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.perPageSmoothing, perPageSmoothing ? '1' : '0').catch(() => {}); }, [perPageSmoothing]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.wordCountAllocation, wordCountAllocation ? '1' : '0').catch(() => {}); }, [wordCountAllocation]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.chapterDetection, chapterDetection ? '1' : '0').catch(() => {}); }, [chapterDetection]);
+  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.voiceCard, voiceCardEnabled ? '1' : '0').catch(() => {}); }, [voiceCardEnabled]);
 
   useEffect(() => {
     (async () => { setLoading(true); await fetchBooks(); setLoading(false); })();
@@ -332,6 +341,14 @@ export default function AdminScreen() {
       await clearProgress({ bookId, format: fmt });
       lastGenAttemptRef.current = null;
     } catch (err: any) {
+      if (err?.code === VOICE_CARD_PENDING_CODE) {
+        // Pause for user approval. Modal will save decision and resume.
+        setVoiceCardEditText(err.voiceCard || '');
+        setVoiceCardModal({ text: err.voiceCard || '', bookId, format: fmt });
+        setGenStatus('Voice card ready — awaiting approval.');
+        setGenerating(false);
+        return;
+      }
       console.warn('[admin] gen failed', err);
       // Look up phase from persisted progress for richer error message.
       let phase = 'unknown';
@@ -346,6 +363,23 @@ export default function AdminScreen() {
         canRetry: true,
       });
     } finally {
+      setGenerating(false);
+    }
+  };
+
+  // Voice card approval handlers. Persist decision then re-invoke last attempt.
+  const resolveVoiceCard = async (card: string) => {
+    const modal = voiceCardModal;
+    if (!modal) return;
+    setVoiceCardModal(null);
+    setGenerating(true);
+    await saveProgress({ bookId: modal.bookId, format: modal.format }, { voiceCard: card, lastCompletedPhase: 'voiceCard' });
+    setVoiceCardEditText('');
+    const attempt = lastGenAttemptRef.current;
+    if (attempt) {
+      setGenerating(false);
+      await runGen(attempt.kind, attempt.args);
+    } else {
       setGenerating(false);
     }
   };
@@ -781,13 +815,20 @@ export default function AdminScreen() {
                 </View>
                 <Switch value={chapterDetection} onValueChange={setChapterDetection} disabled={generating} />
               </View>
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Voice Card</Text>
+                  <Text style={s.strategyHint}>Extract author voice (3 samples) and inject as flavor into prompts. Default OFF. When ON: gen pauses after extraction so you can approve / edit / deny the card.</Text>
+                </View>
+                <Switch value={voiceCardEnabled} onValueChange={setVoiceCardEnabled} disabled={generating} />
+              </View>
             </View>
 
             {/* Strategy Toggles — only visible/applicable for Ultra. */}
             {activeFormat === 'ultra' && (
               <View style={s.strategyBox}>
                 <Text style={s.sectionLabel}>Processing Strategies</Text>
-                <Text style={s.strategyNote}>Voice card (style extraction) runs automatically before generation in every method. Strategies below only run for Ultra.</Text>
+                <Text style={s.strategyNote}>Strategies below only run for Ultra.</Text>
 
                 <View style={s.strategyRow}>
                   <View style={{ flex: 1 }}>
@@ -928,6 +969,35 @@ export default function AdminScreen() {
         onDiscard={discardGen}
         onDismiss={() => setGenError(null)}
       />
+
+      {/* Voice Card Approval Modal */}
+      <Modal visible={!!voiceCardModal} transparent animationType="fade" onRequestClose={() => { /* block dismissal — must pick one */ }}>
+        <View style={s.modalOverlay}>
+          <View style={[s.modalCard, { width: '90%', maxWidth: 560 }]}>
+            <Text style={s.modalCardTitle}>Voice Card — review</Text>
+            <Text style={[s.strategyHint, { marginBottom: 8 }]}>Approve as-is, edit then approve, or deny (gen continues without voice). Engagement for 18-30 readers always overrides voice in the prompts.</Text>
+            <TextInput
+              style={[s.input, { minHeight: 220, textAlignVertical: 'top' }]}
+              value={voiceCardEditText}
+              onChangeText={setVoiceCardEditText}
+              multiline
+              placeholder="Voice card text..."
+              placeholderTextColor={colors.outline}
+            />
+            <View style={s.modalBtns}>
+              <TouchableOpacity style={[s.modalCancel, { flex: 1 }]} onPress={() => resolveVoiceCard('')}>
+                <Text style={s.modalCancelText}>Deny</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.modalCancel, { flex: 1 }]} onPress={() => resolveVoiceCard(voiceCardEditText.trim())}>
+                <Text style={s.modalCancelText}>Edit & Approve</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.modalConfirm, { flex: 1 }]} onPress={() => resolveVoiceCard((voiceCardModal?.text || '').trim())}>
+                <Text style={s.modalConfirmText}>Approve</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Page Edit Modal */}
       <Modal visible={editingPageIdx !== null} transparent animationType="slide">

@@ -83,7 +83,15 @@ export interface StrategyFlags {
   // Classic path: one batch per chapter (vs fixed-20). Per-page/word-count: smoothing
   // runs per chapter slice instead of fixed 5-page chunks.
   chapterDetection?: boolean;
+  // Voice card extraction + injection. Default OFF. When ON, gen pauses after
+  // extraction for user approval (see VOICE_CARD_PENDING sentinel error).
+  voiceCard?: boolean;
 }
+
+// Sentinel thrown when voiceCard flag is ON and a freshly-built voice card needs user approval.
+// Caller (admin UI) catches by code, surfaces the card text in an editable modal, persists
+// the user-decided card via saveProgress({ voiceCard: <approved|edited|''> }), then retries.
+export const VOICE_CARD_PENDING_CODE = 'VOICE_CARD_PENDING';
 
 // Voice card extraction is skipped for very small inputs — cost/benefit isn't worth it.
 const VOICE_CARD_MIN_PAGES = 3;
@@ -129,20 +137,25 @@ function formatLabel(format: FormatType): string {
 
 // ---------- Quality rules ----------
 
-const QUALITY_RULES_MINI = `- For each output page, condense that section into its core idea, turning point, or thesis. Skip supporting arguments, examples, anecdotes — keep only what's load-bearing.
-- Write in the author's voice. Every page should feel like a perfectly chosen excerpt.
+const TOP_PRIORITY_READABILITY = `- TOP PRIORITY: The output must be an interesting, coherent read that captures and holds the attention of readers aged 18-30. Every page must reward the reader. This rule overrides all others — including author-voice mimicry. If preserving the author's exact voice would make the text dull, archaic, or hard to follow for a modern young-adult reader, modernize the prose enough to keep them engaged. Voice is a flavor; engagement is the meal.`;
+
+const QUALITY_RULES_MINI = `${TOP_PRIORITY_READABILITY}
+- For each output page, condense that section into its core idea, turning point, or thesis. Skip supporting arguments, examples, anecdotes — keep only what's load-bearing.
+- Channel the author's voice as flavor — but never at the cost of clarity or pace for an 18-30 reader.
 - Each page must flow naturally into the next, creating a coherent fast-paced read through the whole book.
 - End each page on tension or an unresolved idea — make the reader need the next page.
 - Never fabricate events or details not in the original text.`;
 
-const QUALITY_RULES_PRO = `- Preserve the narrative flow — arguments should build, characters should develop, ideas should layer. Include key examples and pivotal moments.
-- Write in the author's authentic voice and style — never flatten into generic prose.
+const QUALITY_RULES_PRO = `${TOP_PRIORITY_READABILITY}
+- Preserve the narrative flow — arguments should build, characters should develop, ideas should layer. Include key examples and pivotal moments.
+- Channel the author's voice as flavor — but never at the cost of clarity or pace for an 18-30 reader.
 - Be vivid and sensory. Open each page with something that grabs attention.
 - End each page on a micro-cliffhanger or unresolved tension.
 - Never fabricate events or details not in the original text.`;
 
-const QUALITY_RULES_ULTRA = `- Narratively retell each page's content in the author's style. Preserve ALL content — every argument, example, character moment, subplot. Nothing is cut.
-- Write in the author's authentic voice. Be vivid, sensory, emotionally resonant.
+const QUALITY_RULES_ULTRA = `${TOP_PRIORITY_READABILITY}
+- Narratively retell each page's content in the author's style as flavor — but engagement for 18-30 readers comes first. Preserve ALL content — every argument, example, character moment, subplot. Nothing is cut.
+- Be vivid, sensory, emotionally resonant.
 - Each page must be self-contained and readable on its own, yet leave the reader hungry for more.
 - End each page on tension or an unresolved moment.
 - Never fabricate events or details not in the original text.`;
@@ -612,13 +625,13 @@ async function buildVoiceCard(ocrPages: OcrPage[], callApi: TextCallFn, onStatus
   onStatus?.('Extracting voice card...');
   const raw = stripWrapping(await callWithRetry(() => callApi(buildVoiceCardPrompt(sampleA, sampleB, sampleC), { temperature: 0.3 }), onStatus));
   const card = (extractBlock(raw, 'VOICE') || '').trim();
-  if (progressCtx) await saveProgress(progressCtx, { voiceCard: card, lastCompletedPhase: 'voiceCard' });
+  // Don't persist here — caller (admin UI) saves the user-approved version after the pause.
   return card;
 }
 
 function voiceCardBlock(card: string): string {
   if (!card) return '';
-  return `\n\nAUTHOR VOICE CARD — match this exactly:\n${card}\n`;
+  return `\n\nAUTHOR VOICE CARD — use this to inform tone, rhythm, and diction as a secondary flavor. Do NOT mimic mechanically. If matching the voice would make the page dull or hard to follow for an 18-30 reader, prioritize engagement over voice fidelity. The TOP PRIORITY readability rule above overrides this card whenever they conflict.\n${card}\n`;
 }
 
 // Type retained for shared use by per-page + classic-batch slice helpers.
@@ -1385,17 +1398,30 @@ async function _generateInBatchesInner(
     });
   }
 
-  // Voice card — automatic first pass, runs in every gen path. Skipped for tiny inputs.
-  let voiceCard = prior?.voiceCard || '';
-  if (!voiceCard && ocrPages.length >= VOICE_CARD_MIN_PAGES) {
-    try {
-      voiceCard = await buildVoiceCard(ocrPages, callApi, onStatus, progressCtx);
-      if (voiceCard) onStatus?.(`Voice card ready (${voiceCard.length} chars).`);
-    } catch (e) {
-      console.warn('Voice card generation failed, continuing without', e);
+  // Voice card — opt-in via flag. When ON, build → pause for user approval → resume.
+  // prior.voiceCard being a string (including '') means user already decided; don't re-prompt.
+  let voiceCard = '';
+  if (flags.voiceCard) {
+    if (typeof prior?.voiceCard === 'string') {
+      voiceCard = prior.voiceCard;
+      if (voiceCard) onStatus?.(`Resuming with approved voice card (${voiceCard.length} chars).`);
+    } else if (ocrPages.length >= VOICE_CARD_MIN_PAGES) {
+      try {
+        voiceCard = await buildVoiceCard(ocrPages, callApi, onStatus, progressCtx);
+      } catch (e) {
+        console.warn('Voice card generation failed, continuing without', e);
+        voiceCard = '';
+      }
+      if (voiceCard) {
+        // Pause for user approval. Caller persists the user-decided card and re-invokes.
+        const err: any = new Error('Voice card awaiting approval');
+        err.code = VOICE_CARD_PENDING_CODE;
+        err.voiceCard = voiceCard;
+        throw err;
+      } else if (progressCtx) {
+        await saveProgress(progressCtx, { voiceCard: '' });
+      }
     }
-  } else if (voiceCard) {
-    onStatus?.(`Resuming with cached voice card (${voiceCard.length} chars).`);
   }
 
   // Strategy: Word-Count Page Allocation.
