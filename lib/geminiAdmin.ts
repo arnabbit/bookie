@@ -597,8 +597,8 @@ async function callAndParse(callApi: TextCallFn, prompt: string, opts?: TextCall
 
 // ---------- Strategy 2: Voice Card ----------
 
-function buildVoiceCardPrompt(sampleA: string, sampleB: string, sampleC: string): string {
-  return `You are a literary style analyst. Read the three passages below (beginning / middle / end of a book) and produce a compact style card (~300 tokens max). Capture: diction level, sentence rhythm, POV, tense, signature devices, 2-3 representative sentences quoted verbatim. This card will be injected into every subsequent generation prompt — be concrete and actionable, not abstract.
+function buildVoiceCardPrompt(sample: string): string {
+  return `You are a literary style analyst. Read the passage below (the first 25% of a book) and produce a compact style card (~300 tokens max). Capture: diction level, sentence rhythm, POV, tense, signature devices, 2-3 representative sentences quoted verbatim. This card will be injected into every subsequent generation prompt — be concrete and actionable, not abstract.
 
 Use this EXACT text format. Do not add JSON, code fences, or any text outside the markers.
 
@@ -606,24 +606,16 @@ Use this EXACT text format. Do not add JSON, code fences, or any text outside th
 (the style card — diction, rhythm, POV, tense, devices, representative sentences)
 <<<END VOICE>>>
 
---- PASSAGE A (beginning) ---
-${sampleA}
-
---- PASSAGE B (middle) ---
-${sampleB}
-
---- PASSAGE C (end) ---
-${sampleC}`;
+--- PASSAGE (first 25% of book) ---
+${sample}`;
 }
 
 async function buildVoiceCard(ocrPages: OcrPage[], callApi: TextCallFn, onStatus?: (msg: string) => void, progressCtx?: ProgressCtx): Promise<string> {
   if (ocrPages.length === 0) return '';
-  const pick = (idx: number) => ocrPages[Math.max(0, Math.min(ocrPages.length - 1, idx))]?.text || '';
-  const sampleA = pick(Math.floor(ocrPages.length * 0.1));
-  const sampleB = pick(Math.floor(ocrPages.length * 0.5));
-  const sampleC = pick(Math.floor(ocrPages.length * 0.9));
+  const cut = Math.max(1, Math.floor(ocrPages.length * 0.25));
+  const sample = ocrPages.slice(0, cut).map(p => p.text || '').join('\n\n').trim();
   onStatus?.('Extracting voice card...');
-  const raw = stripWrapping(await callWithRetry(() => callApi(buildVoiceCardPrompt(sampleA, sampleB, sampleC), { temperature: 0.3 }), onStatus));
+  const raw = stripWrapping(await callWithRetry(() => callApi(buildVoiceCardPrompt(sample), { temperature: 0.3 }), onStatus));
   const card = (extractBlock(raw, 'VOICE') || '').trim();
   // Don't persist here — caller (admin UI) saves the user-approved version after the pause.
   return card;
