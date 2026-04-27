@@ -31,11 +31,10 @@ Style guide for summaries:
 - Simplify vocabulary just enough to flow effortlessly, but preserve the author's literary fingerprint
 - Be vivid and sensory — make the reader feel textures, hear sounds, sense tension in the room
 - Open each page with something that grabs attention: a moment of conflict, a striking image, an unanswered question, or an emotional spike
-- End each page on a micro-cliffhanger, unresolved tension, or a line that makes the reader need the next page — never end on resolution
+- Do NOT end pages with rhetorical questions or open-ended cliffhanger questions. End on a concrete sentence — a thought, image, observation, or quiet beat. Engagement comes from voice and momentum, not from dangling a question at the reader.
 - Lean into emotional stakes: longing, betrayal, wonder, dread, tenderness, defiance — whatever the source material carries, amplify the feeling without distorting the facts
 - Keep pacing tight — cut anything that doesn't serve momentum or emotion
 - Never fabricate events, details, or character actions not in the original text
-- Each page summary must be self-contained and readable on its own, yet leave the reader hungry for more
 
 Respond with ONLY valid JSON in this exact structure:
 {

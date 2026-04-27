@@ -30,6 +30,7 @@ const STRATEGY_STORAGE_KEYS = {
   wordCountAllocation: 'admin.strategy.wordCountAllocation',
   chapterDetection: 'admin.strategy.chapterDetection',
   voiceCard: 'admin.strategy.voiceCard',
+  engagement18to30: 'admin.strategy.engagement18to30',
 } as const;
 
 type FormatKey = 'mini' | 'pro' | 'ultra';
@@ -96,6 +97,8 @@ export default function AdminScreen() {
   const [chapterDetection, setChapterDetection] = useState(true);
   // Voice card extraction. Default OFF. When ON, gen pauses for user approval.
   const [voiceCardEnabled, setVoiceCardEnabled] = useState(false);
+  // 18-30 engagement directive in quality rules. Default ON.
+  const [engagement18to30, setEngagement18to30] = useState(true);
   // Error popup
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Generation error modal (separate flow — supports retry/discard).
@@ -110,8 +113,8 @@ export default function AdminScreen() {
   // Strategies only apply for Ultra. Strip everything for Mini/Pro so the runtime
   // sees the classic path regardless of toggle state in storage.
   const strategyFlags: StrategyFlags = activeFormat === 'ultra'
-    ? { perPageSmoothing, wordCountAllocation, chapterDetection, voiceCard: voiceCardEnabled }
-    : { chapterDetection, voiceCard: voiceCardEnabled };
+    ? { perPageSmoothing, wordCountAllocation, chapterDetection, voiceCard: voiceCardEnabled, engagement18to30 }
+    : { chapterDetection, voiceCard: voiceCardEnabled, engagement18to30 };
 
   const wordCountMax = (() => {
     const n = parseInt(wordCountMaxText, 10);
@@ -186,6 +189,8 @@ export default function AdminScreen() {
         if (cd != null) setChapterDetection(cd === '1');
         const vc = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.voiceCard);
         if (vc != null) setVoiceCardEnabled(vc === '1');
+        const eng = await AsyncStorage.getItem(STRATEGY_STORAGE_KEYS.engagement18to30);
+        if (eng != null) setEngagement18to30(eng === '1');
       } catch {}
     })();
   }, []);
@@ -194,6 +199,7 @@ export default function AdminScreen() {
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.wordCountAllocation, wordCountAllocation ? '1' : '0').catch(() => {}); }, [wordCountAllocation]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.chapterDetection, chapterDetection ? '1' : '0').catch(() => {}); }, [chapterDetection]);
   useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.voiceCard, voiceCardEnabled ? '1' : '0').catch(() => {}); }, [voiceCardEnabled]);
+  useEffect(() => { AsyncStorage.setItem(STRATEGY_STORAGE_KEYS.engagement18to30, engagement18to30 ? '1' : '0').catch(() => {}); }, [engagement18to30]);
 
   useEffect(() => {
     (async () => { setLoading(true); await fetchBooks(); setLoading(false); })();
@@ -821,6 +827,13 @@ export default function AdminScreen() {
                   <Text style={s.strategyHint}>Extract author voice (3 samples) and inject as flavor into prompts. Default OFF. When ON: gen pauses after extraction so you can approve / edit / deny the card.</Text>
                 </View>
                 <Switch value={voiceCardEnabled} onValueChange={setVoiceCardEnabled} disabled={generating} />
+              </View>
+              <View style={s.strategyRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.strategyLabel}>Engagement 18-30</Text>
+                  <Text style={s.strategyHint}>Prepend the TOP-PRIORITY directive instructing the model to prioritize engagement for 18-30 readers over voice mimicry. Default ON. Flipping does not invalidate prior progress.</Text>
+                </View>
+                <Switch value={engagement18to30} onValueChange={setEngagement18to30} disabled={generating} />
               </View>
             </View>
 

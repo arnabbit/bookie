@@ -86,6 +86,9 @@ export interface StrategyFlags {
   // Voice card extraction + injection. Default OFF. When ON, gen pauses after
   // extraction for user approval (see VOICE_CARD_PENDING sentinel error).
   voiceCard?: boolean;
+  // Prepend the "engaging for 18-30" TOP PRIORITY directive into quality rules.
+  // Default ON. Flipping does not invalidate prior progress (not in flagsCompatible).
+  engagement18to30?: boolean;
 }
 
 // Sentinel thrown when voiceCard flag is ON and a freshly-built voice card needs user approval.
@@ -139,36 +142,33 @@ function formatLabel(format: FormatType): string {
 
 const TOP_PRIORITY_READABILITY = `- TOP PRIORITY: The output must be an interesting, coherent read that captures and holds the attention of readers aged 18-30. Every page must reward the reader. This rule overrides all others — including author-voice mimicry. If preserving the author's exact voice would make the text dull, archaic, or hard to follow for a modern young-adult reader, modernize the prose enough to keep them engaged. Voice is a flavor; engagement is the meal.`;
 
-const QUALITY_RULES_MINI = `${TOP_PRIORITY_READABILITY}
-- For each output page, condense that section into its core idea, turning point, or thesis. Skip supporting arguments, examples, anecdotes — keep only what's load-bearing.
+const QUALITY_RULES_MINI_BODY = `- For each output page, condense that section into its core idea, turning point, or thesis. Skip supporting arguments, examples, anecdotes — keep only what's load-bearing.
 - Channel the author's voice as flavor — but never at the cost of clarity or pace for an 18-30 reader.
 - Each page must flow naturally into the next, creating a coherent fast-paced read through the whole book.
-- End each page on tension or an unresolved idea — make the reader need the next page.
+- Do NOT end pages with rhetorical questions or open-ended cliffhanger questions. End on a concrete sentence — a thought, image, observation, or quiet beat. Engagement comes from voice and momentum, not from dangling a question at the reader.
 - Never fabricate events or details not in the original text.`;
 
-const QUALITY_RULES_PRO = `${TOP_PRIORITY_READABILITY}
-- Preserve the narrative flow — arguments should build, characters should develop, ideas should layer. Include key examples and pivotal moments.
+const QUALITY_RULES_PRO_BODY = `- Preserve the narrative flow — arguments should build, characters should develop, ideas should layer. Include key examples and pivotal moments.
 - Channel the author's voice as flavor — but never at the cost of clarity or pace for an 18-30 reader.
 - Be vivid and sensory. Open each page with something that grabs attention.
-- End each page on a micro-cliffhanger or unresolved tension.
+- Do NOT end pages with rhetorical questions or open-ended cliffhanger questions. End on a concrete sentence — a thought, image, observation, or quiet beat. Engagement comes from voice and momentum, not from dangling a question at the reader.
 - Never fabricate events or details not in the original text.`;
 
-const QUALITY_RULES_ULTRA = `${TOP_PRIORITY_READABILITY}
-- Narratively retell each page's content in the author's style as flavor — but engagement for 18-30 readers comes first. Preserve ALL content — every argument, example, character moment, subplot. Nothing is cut.
+const QUALITY_RULES_ULTRA_BODY = `- Narratively retell each page's content in the author's style as flavor — but engagement for 18-30 readers comes first. Preserve ALL content — every argument, example, character moment, subplot. Nothing is cut.
 - Be vivid, sensory, emotionally resonant.
-- Each page must be self-contained and readable on its own, yet leave the reader hungry for more.
-- End each page on tension or an unresolved moment.
+- Do NOT end pages with rhetorical questions or open-ended cliffhanger questions. End on a concrete sentence — a thought, image, observation, or quiet beat. Engagement comes from voice and momentum, not from dangling a question at the reader.
 - Never fabricate events or details not in the original text.`;
 
-function qualityRules(format: FormatType): string {
-  if (format === 'mini') return QUALITY_RULES_MINI;
-  if (format === 'pro') return QUALITY_RULES_PRO;
-  return QUALITY_RULES_ULTRA;
+function qualityRules(format: FormatType, engagementOn: boolean): string {
+  const body = format === 'mini' ? QUALITY_RULES_MINI_BODY
+    : format === 'pro' ? QUALITY_RULES_PRO_BODY
+    : QUALITY_RULES_ULTRA_BODY;
+  return engagementOn ? `${TOP_PRIORITY_READABILITY}\n${body}` : body;
 }
 
 // ---------- Prompt builders ----------
 
-function buildPrompt(format: FormatType, totalPages: number, bookText: string, voiceCard: string = ''): string {
+function buildPrompt(format: FormatType, totalPages: number, bookText: string, voiceCard: string = '', engagementOn: boolean = true): string {
   const expected = computeExpectedPages(format, totalPages);
   const pagesPerOutput = Math.round(totalPages / expected);
 
@@ -178,7 +178,7 @@ CRITICAL — FULL COVERAGE: Divide all ${totalPages} pages evenly across your ${
 
 STRICT WORD COUNT: Each page MUST be exactly 60-80 words. Not 40, not 100. Count carefully.
 
-${qualityRules(format)}${voiceCardBlock(voiceCard)}
+${qualityRules(format, engagementOn)}${voiceCardBlock(voiceCard, engagementOn)}
 
 Instructions:
 1. Extract title and author.
@@ -227,6 +227,7 @@ function buildBatchPrompt(
   batchText: string,
   voiceCard: string = '',
   chapterLabel?: string,
+  engagementOn: boolean = true,
 ): string {
   const isFirst = batchIndex === 0;
   const chapterLine = chapterLabel
@@ -263,7 +264,7 @@ This text excerpt contains pages ${pdfStart}-${pdfEnd} of the original book (bat
 
 STRICT WORD COUNT: Each page MUST be exactly 60-80 words. Not 40, not 100. Count carefully.
 
-${qualityRules(format)}${voiceCardBlock(voiceCard)}
+${qualityRules(format, engagementOn)}${voiceCardBlock(voiceCard, engagementOn)}
 
 ${metaInstructions}
 
@@ -344,7 +345,7 @@ Do not add JSON, code fences, or any text outside these markers.
 ${items}`;
 }
 
-function buildRegenPrompt(format: FormatType, slice: PageSlice, issue: string, voiceCard: string = ''): string {
+function buildRegenPrompt(format: FormatType, slice: PageSlice, issue: string, voiceCard: string = '', engagementOn: boolean = true): string {
   return `You are regenerating a single page that failed a faithfulness check.
 
 ISSUE REPORTED: ${issue}
@@ -353,7 +354,7 @@ Regenerate the page strictly from the source below. Do not introduce anything no
 
 STRICT WORD COUNT: exactly 60-80 words.
 
-${qualityRules(format)}${voiceCardBlock(voiceCard)}
+${qualityRules(format, engagementOn)}${voiceCardBlock(voiceCard, engagementOn)}
 
 Use this EXACT text format. Do not add JSON, code fences, or any text outside the markers.
 
@@ -401,6 +402,7 @@ async function validateAndRepair(
   onStatus?: (msg: string) => void,
   voiceCard: string = '',
   progressCtx?: ProgressCtx,
+  engagementOn: boolean = true,
 ): Promise<GeneratedPage[]> {
   const flaggedMap = new Map<number, string>();
 
@@ -445,7 +447,7 @@ async function validateAndRepair(
     onStatus?.(`Repairing page ${pageNumber} — ${issue.substring(0, 60)}`);
     try {
       const parsed = await callWithRetry(() =>
-        callAndParse(callApi, buildRegenPrompt(format, slice, issue, voiceCard), { temperature: VALIDATOR_TEMP }),
+        callAndParse(callApi, buildRegenPrompt(format, slice, issue, voiceCard, engagementOn), { temperature: VALIDATOR_TEMP }),
         onStatus,
       );
       const content = parsed?.content;
@@ -482,6 +484,7 @@ async function validateUnit(
   voiceCard: string,
   progressCtx: ProgressCtx | undefined,
   unitKey: string,
+  engagementOn: boolean = true,
 ): Promise<GeneratedPage[]> {
   if (progressCtx) {
     const prior = await loadProgress(progressCtx.bookId, progressCtx.format);
@@ -490,7 +493,7 @@ async function validateUnit(
     }
   }
   try {
-    const result = await validateAndRepair(callApi, format, unitPages, slices, wordCountMax, onStatus, voiceCard);
+    const result = await validateAndRepair(callApi, format, unitPages, slices, wordCountMax, onStatus, voiceCard, undefined, engagementOn);
     if (progressCtx) await markUnitValidated(progressCtx, unitKey);
     return result;
   } catch (e) {
@@ -621,9 +624,12 @@ async function buildVoiceCard(ocrPages: OcrPage[], callApi: TextCallFn, onStatus
   return card;
 }
 
-function voiceCardBlock(card: string): string {
+function voiceCardBlock(card: string, engagementOn: boolean): string {
   if (!card) return '';
-  return `\n\nAUTHOR VOICE CARD — use this to inform tone, rhythm, and diction as a secondary flavor. Do NOT mimic mechanically. If matching the voice would make the page dull or hard to follow for an 18-30 reader, prioritize engagement over voice fidelity. The TOP PRIORITY readability rule above overrides this card whenever they conflict.\n${card}\n`;
+  const tail = engagementOn
+    ? ' If matching the voice would make the page dull or hard to follow for an 18-30 reader, prioritize engagement over voice fidelity. The TOP PRIORITY readability rule above overrides this card whenever they conflict.'
+    : '';
+  return `\n\nAUTHOR VOICE CARD — use this to inform tone, rhythm, and diction as a secondary flavor. Do NOT mimic mechanically.${tail}\n${card}\n`;
 }
 
 // Type retained for shared use by per-page + classic-batch slice helpers.
@@ -648,6 +654,7 @@ function buildSinglePagePrompt(
   sliceText: string,
   voiceCard: string,
   label?: string,
+  engagementOn: boolean = true,
 ): string {
   const labelLine = label ? `\nThis section is: ${label}.` : '';
   return `You are a literary condensation engine. You are generating output page ${pageNumber} of ${totalOutputPages} for a condensed book version.${labelLine}
@@ -656,7 +663,7 @@ This output page covers the source excerpt below (PDF pages ${pdfStart}-${pdfEnd
 
 STRICT WORD COUNT: exactly 60-80 words.
 
-${qualityRules(format)}${voiceCardBlock(voiceCard)}
+${qualityRules(format, engagementOn)}${voiceCardBlock(voiceCard, engagementOn)}
 
 Use this EXACT text format. No JSON, no code fences, no text outside the markers.
 
@@ -674,6 +681,7 @@ function buildSmoothingPrompt(
   prevNeighbor: GeneratedPage | null,
   nextNeighbor: GeneratedPage | null,
   voiceCard: string,
+  engagementOn: boolean = true,
 ): string {
   const neighborIntro = (prevNeighbor || nextNeighbor)
     ? `CONTEXT NEIGHBORS (read-only, do NOT rewrite — only use for tone/flow context):\n${prevNeighbor ? `Previous page ${prevNeighbor.pageNumber}:\n${prevNeighbor.content}\n\n` : ''}${nextNeighbor ? `Next page ${nextNeighbor.pageNumber}:\n${nextNeighbor.content}\n\n` : ''}`
@@ -684,7 +692,7 @@ function buildSmoothingPrompt(
 
   return `You are a literary smoother. Rephrase the draft pages below so they flow together as one continuous read. Fix batch seams, tone jumps, awkward handoffs. PHRASING ONLY — do not change meaning, add content, or remove ideas. Keep each page at 60-80 words.
 
-${qualityRules(format)}${voiceCardBlock(voiceCard)}
+${qualityRules(format, engagementOn)}${voiceCardBlock(voiceCard, engagementOn)}
 
 ${neighborIntro}Rewrite every draft page below. Use this EXACT text format. No JSON, no code fences, no text outside markers.
 
@@ -703,6 +711,7 @@ async function generatePerPage(
   onStatus?: (msg: string) => void,
   progressCtx?: ProgressCtx,
   resumeFrom?: { startIdx: number; existingPages: GeneratedPage[] },
+  engagementOn: boolean = true,
 ): Promise<GeneratedPage[]> {
   // Flatten allocations into per-output-page slices.
   interface PerPageTask { outPage: number; pdfStart: number; pdfEnd: number; sliceText: string; label?: string }
@@ -737,7 +746,7 @@ async function generatePerPage(
   for (let i = startIdx; i < tasks.length; i++) {
     const t = tasks[i];
     onStatus?.(`Per-page ${i + 1}/${tasks.length} — page ${t.outPage} (PDF ${t.pdfStart}-${t.pdfEnd})...`);
-    const prompt = buildSinglePagePrompt(format, t.outPage, totalOutputPages, t.pdfStart, t.pdfEnd, t.sliceText, voiceCard, t.label);
+    const prompt = buildSinglePagePrompt(format, t.outPage, totalOutputPages, t.pdfStart, t.pdfEnd, t.sliceText, voiceCard, t.label, engagementOn);
     const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
     const content = typeof parsed?.content === 'string' ? parsed.content.trim() : '';
     if (!content) throw new Error(`Per-page generation returned empty content for page ${t.outPage}`);
@@ -761,6 +770,7 @@ async function smoothPages(
   onStatus?: (msg: string) => void,
   progressCtx?: ProgressCtx,
   resumeChunkIdx: number = 0,
+  engagementOn: boolean = true,
 ): Promise<GeneratedPage[]> {
   if (pages.length === 0) return pages;
   const result = pages.map((p) => ({ ...p }));
@@ -776,7 +786,7 @@ async function smoothPages(
 
     onStatus?.(`Smoothing chunk ${ci + 1}/${totalChunks} (pages ${chunkPages[0].pageNumber}-${chunkPages[chunkPages.length - 1].pageNumber})...`);
 
-    const prompt = buildSmoothingPrompt(format, chunkPages, prev, next, voiceCard);
+    const prompt = buildSmoothingPrompt(format, chunkPages, prev, next, voiceCard, engagementOn);
     const raw = stripWrapping(await callWithRetry(() => callApi(prompt, { temperature: 0.5 }), onStatus));
 
     // Parse <<<SMOOTHED N>>> ... <<<END SMOOTHED N>>> blocks.
@@ -819,6 +829,7 @@ async function smoothPagesByChapters(
   onStatus?: (msg: string) => void,
   progressCtx?: ProgressCtx,
   resumeChunkIdx: number = 0,
+  engagementOn: boolean = true,
 ): Promise<GeneratedPage[]> {
   if (pages.length === 0 || chapterRanges.length === 0) return pages;
   const result = pages.map((p) => ({ ...p }));
@@ -846,7 +857,7 @@ async function smoothPagesByChapters(
     const labelPart = range.label ? ` "${range.label}"` : '';
     onStatus?.(`Smoothing chapter ${ci + 1}/${totalChunks}${labelPart} (pages ${chunkPages[0].pageNumber}-${chunkPages[chunkPages.length - 1].pageNumber})...`);
 
-    const prompt = buildSmoothingPrompt(format, chunkPages, prev, next, voiceCard);
+    const prompt = buildSmoothingPrompt(format, chunkPages, prev, next, voiceCard, engagementOn);
     const raw = stripWrapping(await callWithRetry(() => callApi(prompt, { temperature: 0.5 }), onStatus));
 
     const re = /<<<\s*SMOOTHED\s+(\d+)\s*>>>([\s\S]*?)<<<\s*END\s+SMOOTHED\s+\1\s*>>>/gi;
@@ -994,9 +1005,12 @@ async function detectBodyRange(
   onStatus?.('Trim: detecting front/back matter...');
   try {
     const raw = stripWrapping(await callApi(buildBodyTrimPrompt(ocrPages), { temperature: 0.2 }));
-    return extractBodyRange(raw, first, last);
+    const range = extractBodyRange(raw, first, last);
+    console.log(`[trim] body range: page ${range.startPage}${range.startLabel ? ` (${range.startLabel})` : ''} -> page ${range.endPage}${range.endLabel ? ` (${range.endLabel})` : ''}`);
+    return range;
   } catch (e) {
     console.warn('Body-range detection failed, using full range', e);
+    console.log(`[trim] fallback full range: page ${first} -> page ${last}`);
     onStatus?.('Trim: detection failed, using full range.');
     return { startPage: first, endPage: last };
   }
@@ -1221,6 +1235,7 @@ function buildWordCountSinglePagePrompt(
   pagesToProduce: number,
   sliceText: string,
   voiceCard: string,
+  engagementOn: boolean = true,
 ): string {
   const countDirective = pagesToProduce === 1
     ? `Produce EXACTLY ONE output page covering this source page.`
@@ -1238,7 +1253,7 @@ This output corresponds to source PDF page ${sourcePage}. ${countDirective}
 
 STRICT WORD COUNT: each output page MUST be 60-80 words.
 
-${qualityRules(format)}${voiceCardBlock(voiceCard)}
+${qualityRules(format, engagementOn)}${voiceCardBlock(voiceCard, engagementOn)}
 
 Use this EXACT text format. No JSON, no code fences, no text outside markers.
 
@@ -1257,6 +1272,7 @@ async function generateByWordCountAllocation(
   onStatus?: (msg: string) => void,
   progressCtx?: ProgressCtx,
   resumeFrom?: { startIdx: number; pages: GeneratedPage[]; sourceByOutput: Map<number, number> },
+  engagementOn: boolean = true,
 ): Promise<{ pages: GeneratedPage[]; sourceByOutput: Map<number, number> }> {
   // Filter zero-allocation pages — they're skipped entirely.
   const active = allocations.filter((a) => a.outCount > 0);
@@ -1279,7 +1295,7 @@ async function generateByWordCountAllocation(
 
     onStatus?.(`Generating page ${i + 1}/${active.length} (source ${a.sourcePage}, ${a.words} words → ${a.outCount} pages)...`);
 
-    const prompt = buildWordCountSinglePagePrompt(format, startOut, totalOutputPages, a.sourcePage, a.outCount, sliceText, voiceCard);
+    const prompt = buildWordCountSinglePagePrompt(format, startOut, totalOutputPages, a.sourcePage, a.outCount, sliceText, voiceCard, engagementOn);
     const raw = stripWrapping(await callWithRetry(() => callApi(prompt, { temperature: 0.6 }), onStatus));
     let blocks = extractPageBlocks(raw);
 
@@ -1366,8 +1382,9 @@ async function _generateInBatchesInner(
   // perPageSmoothing/wordCountAllocation are Ultra-only. Strip them for Mini/Pro so they
   // run the classic single-shot/batch path. chapterDetection applies to ALL formats.
   if (format !== 'ultra') {
-    flags = { chapterDetection: flags.chapterDetection };
+    flags = { chapterDetection: flags.chapterDetection, voiceCard: flags.voiceCard, engagement18to30: flags.engagement18to30 };
   }
+  const engagementOn = flags.engagement18to30 !== false;
 
   // Resume hydration: load existing progress + check path/flag compat.
   let prior: ProgressState | null = null;
@@ -1482,7 +1499,7 @@ async function _generateInBatchesInner(
         }
       : undefined;
     const { pages: rawPages, sourceByOutput } = await generateByWordCountAllocation(
-      format, ocrPages, allocations, callApi, voiceCard, onStatus, progressCtx, wcResumeFrom,
+      format, ocrPages, allocations, callApi, voiceCard, onStatus, progressCtx, wcResumeFrom, engagementOn,
     );
     if (rawPages.length === 0) {
       throw new Error('Word-count generation produced zero pages');
@@ -1536,9 +1553,9 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     let pages: GeneratedPage[];
     if (useChapterDetectionWC && wcChapterBatches.length > 0) {
       const wcRanges = wcChapterBatches.map((c) => ({ outStart: c.outStart, outEnd: c.outEnd, label: c.label }));
-      pages = await smoothPagesByChapters(format, wcSmoothInput, wcRanges, callApi, voiceCard, onStatus, progressCtx, wcSmoothFrom);
+      pages = await smoothPagesByChapters(format, wcSmoothInput, wcRanges, callApi, voiceCard, onStatus, progressCtx, wcSmoothFrom, engagementOn);
     } else {
-      pages = await smoothPages(format, wcSmoothInput, callApi, voiceCard, onStatus, progressCtx, wcSmoothFrom);
+      pages = await smoothPages(format, wcSmoothInput, callApi, voiceCard, onStatus, progressCtx, wcSmoothFrom, engagementOn);
     }
 
     // Validator uses source-map slicing per output page. Chunked + memoized per unit.
@@ -1558,7 +1575,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       for (const u of units) {
         const subset = pages.filter((p) => p.pageNumber >= u.outStart && p.pageNumber <= u.outEnd);
         const subSlices = slices.filter((s) => s.pageNumber >= u.outStart && s.pageNumber <= u.outEnd);
-        const validated = await validateUnit(callApi, format, subset, subSlices, wordCountMax, onStatus, voiceCard, progressCtx, u.key);
+        const validated = await validateUnit(callApi, format, subset, subSlices, wordCountMax, onStatus, voiceCard, progressCtx, u.key, engagementOn);
         merged.push(...validated);
       }
       // Preserve any pages outside unit ranges unchanged.
@@ -1609,7 +1626,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     const ppResume = prior?.lastCompletedPhase === 'perPageGen' && prior.rawPages
       ? { startIdx: (prior.lastCompletedIndex ?? -1) + 1, existingPages: prior.rawPages }
       : undefined;
-    let pages = await generatePerPage(format, ocrPages, allocations, expectedPages, callApi, voiceCard, onStatus, progressCtx, ppResume);
+    let pages = await generatePerPage(format, ocrPages, allocations, expectedPages, callApi, voiceCard, onStatus, progressCtx, ppResume, engagementOn);
 
     // Extract title/author/summary — piggyback on voice card sample OR do a dedicated pass.
     let title = prior?.meta?.title || '';
@@ -1658,9 +1675,9 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     const ppSmoothFrom = smoothResume ? smoothResume.fromIdx : 0;
     if (useChapterDetectionPP && ppChapterBatches.length > 0) {
       const ranges = ppChapterBatches.map((c) => ({ outStart: c.outStart, outEnd: c.outEnd, label: c.label }));
-      pages = await smoothPagesByChapters(format, ppSmoothInput, ranges, callApi, voiceCard, onStatus, progressCtx, ppSmoothFrom);
+      pages = await smoothPagesByChapters(format, ppSmoothInput, ranges, callApi, voiceCard, onStatus, progressCtx, ppSmoothFrom, engagementOn);
     } else {
-      pages = await smoothPages(format, ppSmoothInput, callApi, voiceCard, onStatus, progressCtx, ppSmoothFrom);
+      pages = await smoothPages(format, ppSmoothInput, callApi, voiceCard, onStatus, progressCtx, ppSmoothFrom, engagementOn);
     }
 
     // Validator still runs (word-cap + fabrication check). Chunked + memoized per unit.
@@ -1680,7 +1697,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       for (const u of units) {
         const subset = pages.filter((p) => p.pageNumber >= u.outStart && p.pageNumber <= u.outEnd);
         const subSlices = slices.filter((s) => s.pageNumber >= u.outStart && s.pageNumber <= u.outEnd);
-        const validated = await validateUnit(callApi, format, subset, subSlices, wordCountMax, onStatus, voiceCard, progressCtx, u.key);
+        const validated = await validateUnit(callApi, format, subset, subSlices, wordCountMax, onStatus, voiceCard, progressCtx, u.key, engagementOn);
         merged.push(...validated);
       }
       const covered = new Set(merged.map((p) => p.pageNumber));
@@ -1701,7 +1718,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
     const label = formatLabel(format);
     onStatus?.(`Generating ${expectedPages} ${label} pages...`);
     const bookText = ocrPages.map((p) => `Page ${p.pageNum} start\n${p.text}\nPage ${p.pageNum} end`).join('\n\n');
-    const prompt = buildPrompt(format, totalPdfPages, bookText, voiceCard);
+    const prompt = buildPrompt(format, totalPdfPages, bookText, voiceCard, engagementOn);
     const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
     if (!Array.isArray(parsed?.pages) || parsed.pages.length === 0) {
       throw new Error('No pages returned');
@@ -1718,7 +1735,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
 
     onStatus?.('Validating pages against source...');
     const slices = computePageSlices(ocrPages, pages, 1, totalPdfPages);
-    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx);
+    pages = await validateAndRepair(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx, engagementOn);
 
     if (progressCtx) await saveProgress(progressCtx, { lastCompletedPhase: 'done' });
     return {
@@ -1822,7 +1839,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
       format, b, chapterBatches.length,
       startPage, endPage, count,
       expectedPages, pdfStart, pdfEnd, totalPdfPages,
-      text, voiceCard, ch.label,
+      text, voiceCard, ch.label, engagementOn,
     );
 
     const parsed = await callWithRetry(() => callAndParse(callApi, prompt), onStatus);
@@ -1850,7 +1867,7 @@ ${ocrPages.slice(-2).map((p) => p.text).join('\n\n').substring(0, 2000)}`;
 
     onStatus?.(`Validating chapter ${b + 1}/${chapterBatches.length}${labelPart}...`);
     const slices = computePageSlices(ocrPages, pages, pdfStart, pdfEnd);
-    pages = await validateUnit(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx, `batchGen:${b}`);
+    pages = await validateUnit(callApi, format, pages, slices, wordCountMax, onStatus, voiceCard, progressCtx, `batchGen:${b}`, engagementOn);
 
     allPages.push(...pages);
 
