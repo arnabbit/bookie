@@ -11,6 +11,9 @@ const bookSchema = new mongoose.Schema({
   author: { type: String, required: true },
   coverUrl: String,
   summary: { type: String, default: '' },
+  // Optional curated link to buy/borrow the original book. When empty the API
+  // falls back to an Amazon search URL built from title + author.
+  amazonUrl: { type: String, default: '' },
   formats: {
     mini: [pageSchema],
     pro: [pageSchema],

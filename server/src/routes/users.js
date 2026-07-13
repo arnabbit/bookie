@@ -1,7 +1,26 @@
 const express = require('express');
 const authMiddleware = require('../middleware/auth');
 const User = require('../models/User');
+const { isActiveToday } = require('../lib/streak');
 const router = express.Router();
+
+// Current user's reading streak.
+router.get('/me/streak', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('streak').lean();
+    const s = user?.streak || {};
+    const today = new Date().toISOString().slice(0, 10);
+    res.json({
+      current: s.current || 0,
+      longest: s.longest || 0,
+      freezeTokens: s.freezeTokens || 0,
+      lastActiveDay: s.lastActiveDay || null,
+      activeToday: isActiveToday(s, today),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Search users by username
 router.get('/search', authMiddleware, async (req, res) => {

@@ -30,6 +30,15 @@ const userSchema = new mongoose.Schema({
   isOnline: { type: Boolean, default: false },
   isAdmin: { type: Boolean, default: false },
   readingPositions: { type: Map, of: Number },
+  // Duolingo-style daily reading streak. lastActiveDay is a 'YYYY-MM-DD' string
+  // in the user's local calendar (not a Date) so day boundaries match the device.
+  streak: {
+    current: { type: Number, default: 0 },
+    longest: { type: Number, default: 0 },
+    lastActiveDay: { type: String, default: null },
+    freezeTokens: { type: Number, default: 0 },
+    lastFreezeEarnedAt: { type: Number, default: 0 },
+  },
 });
 
 userSchema.pre('save', async function (next) {

@@ -89,12 +89,13 @@ router.post('/books', async (req, res) => {
 // PUT /api/admin/books/:id — update metadata
 router.put('/books/:id', async (req, res) => {
   try {
-    const { title, author, summary, coverUrl } = req.body;
+    const { title, author, summary, coverUrl, amazonUrl } = req.body;
     const update = {};
     if (title !== undefined) update.title = title.trim();
     if (author !== undefined) update.author = author.trim();
     if (summary !== undefined) update.summary = summary;
     if (coverUrl !== undefined) update.coverUrl = coverUrl;
+    if (amazonUrl !== undefined) update.amazonUrl = amazonUrl;
 
     const book = await Book.findByIdAndUpdate(req.params.id, update, { new: true }).lean();
     if (!book) return res.status(404).json({ error: 'Book not found' });
