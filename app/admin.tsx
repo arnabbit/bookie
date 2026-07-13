@@ -52,6 +52,7 @@ interface BookFull {
   author: string;
   summary: string;
   coverUrl: string;
+  amazonUrl?: string;
   formats: Record<FormatKey, { pageNumber: number; content: string; imageUrl?: string }[]>;
 }
 
@@ -76,6 +77,7 @@ export default function AdminScreen() {
   const [metaAuthor, setMetaAuthor] = useState('');
   const [metaSummary, setMetaSummary] = useState('');
   const [metaCoverUrl, setMetaCoverUrl] = useState('');
+  const [metaAmazonUrl, setMetaAmazonUrl] = useState('');
   // New book
   const [showNewBook, setShowNewBook] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -241,6 +243,7 @@ export default function AdminScreen() {
       setMetaAuthor(book.author);
       setMetaSummary(book.summary || '');
       setMetaCoverUrl(book.coverUrl || '');
+      setMetaAmazonUrl(book.amazonUrl || '');
       setActiveFormat('mini');
       setPreviewPages(null);
       setScreen('editor');
@@ -274,7 +277,7 @@ export default function AdminScreen() {
       const res = await fetch(`${API_URL}/api/admin/books/${editingBook._id}`, {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ title: metaTitle, author: metaAuthor, summary: metaSummary, coverUrl: metaCoverUrl }),
+        body: JSON.stringify({ title: metaTitle, author: metaAuthor, summary: metaSummary, coverUrl: metaCoverUrl, amazonUrl: metaAmazonUrl }),
       });
       await ensureOk(res, 'Save details');
       const updated = await res.json();
@@ -690,6 +693,7 @@ export default function AdminScreen() {
             <TextInput style={s.input} placeholder="Author" placeholderTextColor={colors.outline} value={metaAuthor} onChangeText={setMetaAuthor} />
             <TextInput style={[s.input, { minHeight: 80, textAlignVertical: 'top' }]} placeholder="Summary" placeholderTextColor={colors.outline} value={metaSummary} onChangeText={setMetaSummary} multiline />
             <TextInput style={s.input} placeholder="Cover URL" placeholderTextColor={colors.outline} value={metaCoverUrl} onChangeText={setMetaCoverUrl} />
+            <TextInput style={s.input} placeholder="Amazon URL (optional — falls back to search)" placeholderTextColor={colors.outline} value={metaAmazonUrl} onChangeText={setMetaAmazonUrl} autoCapitalize="none" />
             <TouchableOpacity style={s.saveMetaBtn} onPress={saveMeta}>
               <Text style={s.saveMetaBtnText}>Save Details</Text>
             </TouchableOpacity>

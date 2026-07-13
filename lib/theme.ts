@@ -160,6 +160,13 @@ export const FORMAT_DISPLAY: Record<string, string> = {
   ultra: 'Full',
 };
 
+// Honest, length-describing subtitles for each retelling format.
+export const FORMAT_TAGLINE: Record<string, string> = {
+  mini: 'shortest retelling',
+  pro: 'condensed retelling',
+  ultra: 'full-length retelling',
+};
+
 export const FORMAT_ACCENT: Record<string, string> = {
   mini: colors.tertiary,
   pro: colors.tertiary,

@@ -4,6 +4,7 @@ import { Platform, StyleSheet, View, Text } from 'react-native';
 import React from 'react';
 import { BlurView } from 'expo-blur';
 import { colors, fonts } from '@/lib/theme';
+import { SOCIAL_ENABLED } from '@/lib/flags';
 
 function TabBarBackground() {
   if (Platform.OS === 'ios') {
@@ -73,6 +74,7 @@ export default function TabLayout() {
         name="social"
         options={{
           title: 'Social',
+          href: SOCIAL_ENABLED ? undefined : null,
           tabBarIcon: ({ focused }) => <TabIcon name={focused ? 'people' : 'people-outline'} focused={focused} />,
         }}
       />

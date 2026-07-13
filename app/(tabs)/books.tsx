@@ -11,12 +11,13 @@ import {
   ScrollView,
   Dimensions,
   TextInput,
+  Linking,
 } from 'react-native';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { API_URL, useAuth } from '@/lib/AuthContext';
-import { colors, fonts, typography, radius, shadows, ghostBorder, FORMAT_DISPLAY } from '@/lib/theme';
+import { colors, fonts, typography, radius, shadows, ghostBorder, FORMAT_DISPLAY, FORMAT_TAGLINE } from '@/lib/theme';
 
 type BookFormat = 'mini' | 'pro' | 'ultra';
 
@@ -28,6 +29,8 @@ interface CatalogueBook {
   summary: string;
   availableFormats: BookFormat[];
   pageCounts: Record<BookFormat, number>;
+  readMinutes?: Record<BookFormat, number>;
+  purchaseUrl?: string;
 }
 
 interface MyBook {
@@ -40,6 +43,7 @@ interface MyBook {
   readingPosition: number;
   progress: number;
   addedAt: string;
+  finishedAt?: string | null;
 }
 
 type Tab = 'my-books' | 'catalogue';
@@ -54,6 +58,7 @@ export default function BooksScreen() {
   const [adding, setAdding] = useState(false);
   const [completedExpanded, setCompletedExpanded] = useState(false);
   const [search, setSearch] = useState('');
+  const [streak, setStreak] = useState<{ current: number; activeToday: boolean } | null>(null);
   const { token } = useAuth();
   const router = useRouter();
   const params = useLocalSearchParams<{ openBook?: string; format?: string }>();
@@ -80,18 +85,27 @@ export default function BooksScreen() {
     }
   }, [token]);
 
+  const fetchStreak = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/users/me/streak`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) setStreak(await res.json());
+    } catch { /* ignore */ }
+  }, [token]);
+
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await Promise.all([fetchCatalogue(), fetchMyBooks()]);
+      await Promise.all([fetchCatalogue(), fetchMyBooks(), fetchStreak()]);
       setLoading(false);
     })();
-  }, [fetchCatalogue, fetchMyBooks]);
+  }, [fetchCatalogue, fetchMyBooks, fetchStreak]);
 
-  // Refetch my books on screen focus (updates progress bars)
+  // Refetch my books + streak on screen focus (updates progress bars & flame)
   useFocusEffect(useCallback(() => {
-    if (!loading) fetchMyBooks();
-  }, [fetchMyBooks, loading]));
+    if (!loading) { fetchMyBooks(); fetchStreak(); }
+  }, [fetchMyBooks, fetchStreak, loading]));
 
   // Deep-link: open catalogue modal for a specific book+format
   useEffect(() => {
@@ -253,6 +267,11 @@ export default function BooksScreen() {
             <View style={styles.modalContentSection}>
               <Text style={styles.modalBookTitle}>{selectedBook.title}</Text>
 
+              <View style={styles.retellingBadge}>
+                <Ionicons name="information-circle-outline" size={14} color={colors.onSurfaceVariant} />
+                <Text style={styles.retellingBadgeText}>A retelling — not the original text</Text>
+              </View>
+
               {selectedBook.summary ? (
                 <>
                   <Text style={styles.sectionLabel}>Synopsis</Text>
@@ -265,7 +284,7 @@ export default function BooksScreen() {
               <View style={styles.formatGrid}>
                 {(['mini', 'pro', 'ultra'] as BookFormat[]).map((f) => {
                   const available = selectedBook.availableFormats.includes(f);
-                  const pages = selectedBook.pageCounts[f];
+                  const mins = selectedBook.readMinutes?.[f];
                   const isSelected = selectedFormat === f;
                   return (
                     <TouchableOpacity
@@ -292,7 +311,7 @@ export default function BooksScreen() {
                       </View>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
                         <Ionicons
-                          name={f === 'ultra' ? 'book-outline' : 'time-outline'}
+                          name="time-outline"
                           size={12}
                           color={available ? colors.tertiary : colors.outlineVariant}
                         />
@@ -300,9 +319,14 @@ export default function BooksScreen() {
                           styles.formatOptionPages,
                           available && { color: colors.tertiary },
                         ]}>
-                          {available ? `${pages} PAGES` : 'N/A'}
+                          {available ? `~${mins || 1} MIN` : 'N/A'}
                         </Text>
                       </View>
+                      {available && (
+                        <Text style={styles.formatOptionTagline} numberOfLines={1}>
+                          {FORMAT_TAGLINE[f]}
+                        </Text>
+                      )}
                     </TouchableOpacity>
                   );
                 })}
@@ -332,6 +356,17 @@ export default function BooksScreen() {
                     )}
                   </LinearGradient>
                 </TouchableOpacity>
+
+                {selectedBook.purchaseUrl ? (
+                  <TouchableOpacity
+                    style={styles.getRealBtn}
+                    onPress={() => Linking.openURL(selectedBook.purchaseUrl!).catch(() => {})}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="book-outline" size={18} color={colors.tertiary} />
+                    <Text style={styles.getRealBtnText}>Get the real book</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             </View>
           </ScrollView>
@@ -351,8 +386,18 @@ export default function BooksScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <Text style={styles.header}>Books</Text>
-      <Text style={styles.headerSubtitle}>Your curated reading collection.</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.header}>Library</Text>
+        {streak && streak.current > 0 && (
+          <View style={[styles.streakChip, !streak.activeToday && styles.streakChipIdle]}>
+            <Ionicons name="flame" size={16} color={streak.activeToday ? colors.tertiary : colors.onSurfaceVariant} />
+            <Text style={[styles.streakChipText, !streak.activeToday && { color: colors.onSurfaceVariant }]}>
+              {streak.current}
+            </Text>
+          </View>
+        )}
+      </View>
+      <Text style={styles.headerSubtitle}>Short retellings to keep you reading every day.</Text>
 
       {/* Search */}
       <View style={styles.searchWrap}>
@@ -460,13 +505,35 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
   // Header
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    paddingTop: 56,
+  },
   header: {
     fontFamily: fonts.headlineBold,
     fontSize: 36,
     color: colors.onSurface,
-    paddingHorizontal: 24,
-    paddingTop: 56,
     letterSpacing: -0.5,
+  },
+  streakChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: colors.tertiary + '1a',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 9999,
+  },
+  streakChipIdle: {
+    backgroundColor: colors.surfaceContainerHighest,
+  },
+  streakChipText: {
+    fontFamily: fonts.headlineBold,
+    fontSize: 16,
+    color: colors.tertiary,
   },
   headerSubtitle: {
     fontFamily: fonts.body,
@@ -769,7 +836,46 @@ const styles = StyleSheet.create({
     fontSize: 32,
     color: colors.onSurface,
     letterSpacing: -0.5,
+    marginBottom: 12,
+  },
+  retellingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.surfaceContainerHigh,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
     marginBottom: 20,
+  },
+  retellingBadgeText: {
+    fontFamily: fonts.bodySemiBold,
+    fontSize: 11,
+    color: colors.onSurfaceVariant,
+  },
+  formatOptionTagline: {
+    fontFamily: fonts.body,
+    fontSize: 9,
+    color: colors.onSurfaceVariant,
+    marginTop: 4,
+  },
+  getRealBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    marginTop: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: colors.tertiary + '55',
+  },
+  getRealBtnText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.tertiary,
   },
   sectionLabel: {
     fontFamily: fonts.bodyBold,

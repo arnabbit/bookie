@@ -8,7 +8,10 @@ import { useEffect, useState, useCallback } from 'react';
 import { Platform, View, ActivityIndicator } from 'react-native';
 import 'react-native-reanimated';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { SOCIAL_ENABLED } from '@/lib/flags';
+import { ONBOARDING_SEEN_KEY } from '@/app/onboarding';
 
 const AtelierTheme: Theme = {
   ...DefaultTheme,
@@ -34,20 +37,33 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   const { token, isLoading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+  // null = onboarding flag not yet read this navigation
+  const [onboardingSeen, setOnboardingSeen] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (isLoading) return;
+    let active = true;
+    (async () => {
+      let seen = true;
+      try { seen = (await AsyncStorage.getItem(ONBOARDING_SEEN_KEY)) === '1'; } catch { /* default seen */ }
+      if (!active) return;
+      setOnboardingSeen(seen);
 
-    const inAuthGroup = segments[0] === ('auth' as any);
+      const inAuthGroup = segments[0] === ('auth' as any);
+      const inOnboarding = segments[0] === ('onboarding' as any);
 
-    if (!token && !inAuthGroup) {
-      router.replace('/auth/login' as any);
-    } else if (token && inAuthGroup) {
-      router.replace('/(tabs)/books' as any);
-    }
+      if (!token && !inAuthGroup) {
+        router.replace('/auth/login' as any);
+      } else if (token && !seen && !inOnboarding) {
+        router.replace('/onboarding' as any);
+      } else if (token && seen && (inAuthGroup || inOnboarding)) {
+        router.replace('/(tabs)/books' as any);
+      }
+    })();
+    return () => { active = false; };
   }, [token, isLoading, segments]);
 
-  if (isLoading) {
+  if (isLoading || onboardingSeen === null) {
     return (
       <View style={{ flex: 1, backgroundColor: AtelierTheme.colors.background, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color={AtelierTheme.colors.primary} />
@@ -112,9 +128,14 @@ function RootLayoutNav() {
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="auth" options={{ headerShown: false }} />
-          <Stack.Screen name="chat" options={{ headerShown: false }} />
-          <Stack.Screen name="conversations" options={{ headerShown: false }} />
-          <Stack.Screen name="book-picker" options={{ headerShown: true, title: 'Share Page', presentation: 'modal' }} />
+          <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
+          {SOCIAL_ENABLED && (
+            <>
+              <Stack.Screen name="chat" options={{ headerShown: false }} />
+              <Stack.Screen name="conversations" options={{ headerShown: false }} />
+              <Stack.Screen name="book-picker" options={{ headerShown: true, title: 'Share Page', presentation: 'modal' }} />
+            </>
+          )}
           <Stack.Screen name="admin" options={{ headerShown: false }} />
         </Stack>
       </AuthGuard>

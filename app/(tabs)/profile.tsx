@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, API_URL } from '@/lib/AuthContext';
 import { colors, fonts, radius, shadows, ghostBorder } from '@/lib/theme';
+import { SOCIAL_ENABLED } from '@/lib/flags';
 
 export default function ProfileScreen() {
   const { user, token, logout } = useAuth();
@@ -23,23 +24,30 @@ export default function ProfileScreen() {
   const [booksRead, setBooksRead] = useState(0);
   const [pagesRead, setPagesRead] = useState(0);
   const [friendsCount, setFriendsCount] = useState(0);
+  const [streakCurrent, setStreakCurrent] = useState(0);
 
   const fetchStats = useCallback(async () => {
     if (!token) return;
     const headers = { Authorization: `Bearer ${token}` };
     try {
-      const [booksRes, friendsRes] = await Promise.all([
-        fetch(`${API_URL}/api/books/my-books`, { headers }),
-        fetch(`${API_URL}/api/friends`, { headers }),
-      ]);
+      const booksRes = await fetch(`${API_URL}/api/books/my-books`, { headers });
       if (booksRes.ok) {
         const books = await booksRes.json();
-        setBooksRead(books.filter((b: any) => b.progress >= 1).length);
+        setBooksRead(books.filter((b: any) => b.finishedAt || b.progress >= 1).length);
         setPagesRead(books.reduce((sum: number, b: any) => sum + (b.readingPosition || 0), 0));
       }
-      if (friendsRes.ok) {
-        const friends = await friendsRes.json();
-        setFriendsCount(friends.length);
+      if (SOCIAL_ENABLED) {
+        const friendsRes = await fetch(`${API_URL}/api/friends`, { headers });
+        if (friendsRes.ok) {
+          const friends = await friendsRes.json();
+          setFriendsCount(friends.length);
+        }
+      } else {
+        const streakRes = await fetch(`${API_URL}/api/users/me/streak`, { headers });
+        if (streakRes.ok) {
+          const s = await streakRes.json();
+          setStreakCurrent(s.current || 0);
+        }
       }
     } catch {}
   }, [token]);
@@ -119,16 +127,23 @@ export default function ProfileScreen() {
       <View style={styles.statsGrid}>
         <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerLow }]}>
           <Text style={[styles.statNumber, { color: colors.tertiary }]}>{booksRead}</Text>
-          <Text style={styles.statLabel}>Books Read</Text>
+          <Text style={styles.statLabel}>Books Finished</Text>
         </View>
         <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerHighest }]}>
           <Text style={styles.statNumber}>{pagesRead}</Text>
           <Text style={styles.statLabel}>Pages Read</Text>
         </View>
-        <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerLow }]}>
-          <Text style={styles.statNumber}>{friendsCount}</Text>
-          <Text style={styles.statLabel}>Friends</Text>
-        </View>
+        {SOCIAL_ENABLED ? (
+          <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerLow }]}>
+            <Text style={styles.statNumber}>{friendsCount}</Text>
+            <Text style={styles.statLabel}>Friends</Text>
+          </View>
+        ) : (
+          <View style={[styles.statCard, { backgroundColor: colors.surfaceContainerLow }]}>
+            <Text style={[styles.statNumber, { color: colors.tertiary }]}>{streakCurrent}</Text>
+            <Text style={styles.statLabel}>Day Streak</Text>
+          </View>
+        )}
       </View>
 
       {/* Menu Items */}
@@ -145,7 +160,7 @@ export default function ProfileScreen() {
       {/* Logout */}
       <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
         <Ionicons name="log-out-outline" size={20} color={colors.error} />
-        <Text style={styles.logoutText}>Logout from Booksocial</Text>
+        <Text style={styles.logoutText}>Logout from Retold</Text>
       </TouchableOpacity>
     </ScrollView>
   );
