@@ -106,7 +106,7 @@ export default function HelpScreen() {
           <Step number={2} text='Click "Get API Key" in the top navigation bar.' />
           <Step number={3} text='Click "Create API Key" and select or create a Google Cloud project.' />
           <Step number={4} text='Copy the generated API key.' />
-          <Step number={5} text='Open Bookie, go to Settings, and paste the key into the API Key field.' />
+          <Step number={5} text='Open Retold, go to Settings, and paste the key into the API Key field.' />
           <Step number={6} text={'Tap "Save Key" \u2014 you\'re all set!'} />
 
           <TouchableOpacity
@@ -129,32 +129,27 @@ export default function HelpScreen() {
         <HelpSection
           id="how-to-use"
           icon="book-outline"
-          title="How to Use Bookie"
+          title="How Retold Works"
           highlighted={section === 'how-to-use'}
           onLayout={registerPosition('how-to-use')}
         >
           <Text style={styles.description}>
-            Bookie transforms your PDF books into beautifully narrated chapter summaries you can read on the go.
+            Retold gives you short, swipeable retellings of great books — a low-friction way to rebuild your reading habit and rediscover stories worth finishing. A retelling is not the book itself; it is our narrated take on it, so you can meet a story before you commit to the full text.
           </Text>
 
-          <Text style={styles.subheading}>Browse Your Library</Text>
+          <Text style={styles.subheading}>Pick a length</Text>
           <Text style={styles.bodyText}>
-            The home screen shows your book collection. Tap any book to start reading its chapter summaries. Swipe through chapters and tap "Read Details" to dive into page-by-page narrations.
+            Every book comes in three lengths. Essentials is the shortest retelling, Abridged is a condensed retelling, and Full is the full-length retelling. Start short and go deeper whenever a story pulls you in.
           </Text>
 
-          <Text style={styles.subheading}>Add a New Book</Text>
+          <Text style={styles.subheading}>Read a page a day</Text>
           <Text style={styles.bodyText}>
-            Tap the blue "+" button at the bottom right of the home screen. Select a PDF file (up to 20MB) from your device. Our AI will analyze the book and generate literary-style summaries for each chapter.
+            Swipe through one page at a time. Reading on any day keeps your streak alive — the goal is a small, steady habit rather than a marathon.
           </Text>
 
-          <Text style={styles.subheading}>Reading Experience</Text>
+          <Text style={styles.subheading}>Get the real book</Text>
           <Text style={styles.bodyText}>
-            Each book is broken into chapters with warm, first-person narrative summaries. Tap into a chapter to read page-by-page breakdowns — perfect for revisiting key moments or getting the gist of a book quickly.
-          </Text>
-
-          <Text style={styles.subheading}>Discover More</Text>
-          <Text style={styles.bodyText}>
-            When you finish a book, Bookie recommends similar reads from your library based on matching genres and themes.
+            When a retelling grabs you, tap "Get the real book" to find the original and read it in full. Retold is the on-ramp; the paperback is the destination.
           </Text>
         </HelpSection>
       </ScrollView>

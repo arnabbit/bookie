@@ -102,14 +102,14 @@ export default function LoginScreen() {
         <View style={styles.brandSection}>
           <View style={styles.brandRow}>
             <Ionicons name="book" size={32} color={colors.tertiary} />
-            <Text style={styles.brandName}>Booksocial</Text>
+            <Text style={styles.brandName}>Retold</Text>
           </View>
           <Text style={styles.heroText}>
-            Where thoughts{'\n'}
-            <Text style={styles.heroItalic}>find a home.</Text>
+            Great books,{'\n'}
+            <Text style={styles.heroItalic}>retold for you.</Text>
           </Text>
           <Text style={styles.heroSubtitle}>
-            Join a sanctuary of modern readers. Access your library or create your legacy simply by entering your details.
+            Bite-sized retellings that rebuild your reading habit — one page a day, until you pick up the real thing.
           </Text>
         </View>
 

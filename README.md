@@ -1,50 +1,30 @@
-# Welcome to your Expo app 👋
+# Retold 📖
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Retold is a reading-habit app. It gives you short, swipeable **retellings** of great books — a low-friction on-ramp that rebuilds the daily reading habit and nudges you toward finishing the real thing.
+
+A retelling is *not* the book. It's our narrated take, offered in three lengths — **Essentials** (shortest), **Abridged** (condensed), and **Full** (full-length) — so you can meet a story before committing to the full text. Every book links out to buy or borrow the original.
+
+The launch catalogue is public-domain classics. Progress persists per book, a Duolingo-style streak rewards reading a little every day, and finishing a retelling celebrates with a "get the real book" hand-off.
+
+## Stack
+
+- **App**: React Native / Expo (expo-router), TypeScript
+- **Server**: Express + MongoDB (Mongoose), JWT auth
+- Retellings are generated from source PDFs via an admin pipeline (Gemini / OpenRouter).
 
 ## Get started
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Server:
 
-## Learn more
+```bash
+cd server
+npm install
+npm start
+```
 
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+See `RETOLD_PLAN.md` for the product direction and roadmap.
